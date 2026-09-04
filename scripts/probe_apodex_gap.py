@@ -70,7 +70,7 @@ SIGNALS: tuple[tuple[str, str, str, str], ...] = (
 
 def git_grep(ref: str, pathspec: str, pattern: str) -> list[str]:
     result = subprocess.run(
-        ["git", "grep", "-l", "-E", pattern, ref, "--", pathspec],
+        ["git", "grep", "-l", "-P", pattern, ref, "--", pathspec],
         capture_output=True,
         text=True,
         check=False,

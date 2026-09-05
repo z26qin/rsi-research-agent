@@ -8,6 +8,7 @@ from momentum_research_agent.coordinator.coordinator import Coordinator
 from momentum_research_agent.coordinator.gap_seed import (
     append_gaps,
     classify_capability,
+    gap_task_fields,
     load_rows,
 )
 from momentum_research_agent.models.schemas import (
@@ -19,6 +20,7 @@ from momentum_research_agent.models.schemas import (
     VerificationReport,
 )
 from momentum_research_agent.state.reports import persist_verification_report
+from momentum_research_agent.state.policies import PolicyPatch, PolicyStore, merge_policy_patch
 
 
 def _coordinator(tmp_path: Path) -> Coordinator:
@@ -73,6 +75,34 @@ def test_classify_momentum_capabilities() -> None:
     assert classify_capability(crowding) is MomentumCapability.CROWDING
     assert classify_capability(unwind) is MomentumCapability.UNWIND_CRASH
     assert classify_capability(quality) is MomentumCapability.SOURCE_QUALITY
+
+
+def test_gap_task_appends_active_capability_template(tmp_path: Path) -> None:
+    store = PolicyStore(tmp_path)
+    candidate = merge_policy_patch(
+        store.load_active(),
+        PolicyPatch(
+            task_templates={
+                MomentumCapability.SOURCE_QUALITY: "Retrieve a primary filing before secondary commentary."
+            }
+        ),
+        trigger_ids=["trajectory:source-quality"],
+    )
+    store.write_version(candidate)
+    store.activate(candidate.version_id)
+    from momentum_research_agent.models.schemas import GapLedgerRow
+
+    row = GapLedgerRow(
+        evidence_id="ev-source",
+        capability=MomentumCapability.SOURCE_QUALITY,
+        gap_kind=GapKind.MISSING_EVIDENCE,
+        claim="Primary filing was not retrieved.",
+    )
+
+    _title, assignment, profile = gap_task_fields(row, candidate)
+
+    assert "primary filing" in assignment
+    assert profile == "technicals_analyst"
 
 
 def test_seed_from_ledger_consumes_engine_mock(tmp_path: Path) -> None:

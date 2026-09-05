@@ -21,7 +21,11 @@ from momentum_research_agent.config import (
     reports_root,
     sub_agent_model,
 )
-from momentum_research_agent.coordinator.coordinator import Coordinator, _render_synthesis_markdown
+from momentum_research_agent.coordinator.coordinator import (
+    Coordinator,
+    _render_synthesis_markdown,
+    load_or_snapshot_policy,
+)
 from momentum_research_agent.coordinator.task_board import TaskBoard
 from momentum_research_agent.models.schemas import Task, UsageSummary, new_session_id
 from momentum_research_agent.state.reports import (
@@ -148,6 +152,7 @@ async def run_single(
         project_root=project_root,
         verbose=verbose,
         console=console,
+        policy=load_or_snapshot_policy(session_dir, project_root),
     )
     try:
         result = await agent.run(task, None, session_dir)

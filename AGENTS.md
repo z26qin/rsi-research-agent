@@ -61,6 +61,7 @@ reports/gap_ledger.jsonl                  # cross-session OPEN/CONSUMED/CLOSED g
 reports/prompt_evolution.json             # runtime overlay rules (not weight training)
 reports/profile_hints.md                  # appended to research profiles only; verifier skips it
 reports/{YYYYMMDD}_{HHmmss}_{8-char-hex}/
+  policy_snapshot.json               # active policy pinned once for this session
   task_board.json
   sub_reports/{task_id}_{profile}.json    # source of truth
   sub_reports/{task_id}_{profile}.md      # human rendering
@@ -70,6 +71,11 @@ reports/{YYYYMMDD}_{HHmmss}_{8-char-hex}/
   verification.md
   synthesis.md
   synthesis.json
+
+reports/policies/
+  active.json                        # atomic pointer to one immutable version
+  versions/{version_id}.json         # content-addressed policy versions
+  experiments/{experiment_id}.json   # one-cycle evaluation records
 ```
 
 Resume loads JSON first. Legacy Markdown-only sessions become a low-confidence `partial` report; structure is not pretended to survive.
@@ -84,6 +90,12 @@ Each sub-agent run is bounded by `LoopBudget`:
 - `tool_timeout_s` (default 10)
 
 Every LLM/tool call uses `min(configured_timeout, remaining_overall_deadline)`. `asyncio.CancelledError` is never converted into a tool observation.
+
+`--improve` is separate from `--eval`. It runs the pinned bundled engine through an explicit fixture root, a private output cache, and a no-network subprocess guard, then evaluates recorded trajectory contracts and may generate at most one candidate. These checks measure offline contract coverage, not LLM reasoning quality. Missing or invalid engine fixtures reject before candidate generation. Live LLM/data evaluation and staged replanning are outside this phase.
+
+Research policy is loaded and snapshotted once when a run starts. Resume uses the same `policy_snapshot.json`; never promote a policy into an active research run. Policy may guide only research prompt overlays, gap-task additions, and selection among tools already present in that profile's allowlist. It cannot expand authorization, alter deterministic engine logic, or influence verification. Committed profiles stay frozen and `Verifier` never loads policy.
+
+Rollback must use `PolicyStore.activate(prior_version_id)` so the target version and content hash are validated before the atomic pointer changes. Improvement cycles are serialized by `reports/policies/improvement.lock`; after an interruption, confirm no improvement process remains before manually deleting only that stale lock.
 
 ## Tool authorization (fail closed)
 

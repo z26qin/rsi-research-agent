@@ -27,11 +27,24 @@ from momentum_research_agent.coordinator.coordinator import (
     load_or_snapshot_policy,
 )
 from momentum_research_agent.coordinator.task_board import TaskBoard
+from momentum_research_agent.eval.momentum_eval import (
+    engine_case_results,
+    run_eval,
+    run_offline_engine_eval,
+)
+from momentum_research_agent.eval.policy_improver import (
+    LLMCandidateGenerator,
+    ImprovementOutcome,
+    run_improvement_cycle,
+)
+from momentum_research_agent.eval.policy_suite import FileEvalCaseProvider
 from momentum_research_agent.models.schemas import Task, UsageSummary, new_session_id
+from momentum_research_agent.state.policies import PolicyStore
 from momentum_research_agent.state.reports import (
     render_research_report_markdown,
     render_verification_markdown,
 )
+from momentum_research_agent.tools.engine_pipeline import bundled_engine_root
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,13 +90,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show full tool-call details.",
     )
-    parser.add_argument(
+    commands = parser.add_mutually_exclusive_group()
+    commands.add_argument(
         "--eval",
         action="store_true",
         dest="run_eval",
         help="Run frozen DM eval (no DeepSeek). Writes failures to the gap ledger.",
     )
+    commands.add_argument(
+        "--improve",
+        action="store_true",
+        help="Run the layered offline suite and attempt one constrained policy promotion.",
+    )
     return parser
+
+
+def _print_improvement_outcome(
+    console: Console,
+    outcome: ImprovementOutcome,
+    *,
+    project_root: Path,
+) -> None:
+    failures = [case.case_id for case in outcome.baseline.cases if not case.passed]
+    console.print(
+        "[bold]baseline failures[/bold] "
+        + (", ".join(failures) if failures else "none")
+    )
+    candidate = outcome.candidate_version_id or "not generated"
+    console.print(f"[bold]candidate result[/bold] {outcome.status} ({candidate})")
+    console.print(
+        f"[bold]active version[/bold] {PolicyStore(project_root).load_active().version_id}"
+    )
+    console.print(f"[bold]reason[/bold] {outcome.reason}")
 
 
 def resolve_session_dir(
@@ -202,8 +240,6 @@ async def async_main(args: argparse.Namespace) -> int:
     load_env(project_root)
 
     if getattr(args, "run_eval", False):
-        from momentum_research_agent.eval.momentum_eval import run_eval
-
         results = await run_eval(project_root)
         failed = [item for item in results if not item["ok"]]
         for item in results:
@@ -216,6 +252,35 @@ async def async_main(args: argparse.Namespace) -> int:
             return 1
         console.print("[green]eval passed (live run_mvp V_D)[/green]")
         return 0
+
+    if getattr(args, "improve", False):
+        fixture_path = (
+            Path(__file__).resolve().parent
+            / "eval"
+            / "fixtures"
+            / "trajectory_cases.json"
+        )
+        offline_results = await run_offline_engine_eval(
+            bundled_engine_root(project_root)
+        )
+        outcome = await run_improvement_cycle(
+            project_root,
+            generator=LLMCandidateGenerator(
+                model=args.coordinator_model or coordinator_model()
+            ),
+            engine_results=engine_case_results(offline_results),
+            provider=FileEvalCaseProvider(fixture_path),
+        )
+        _print_improvement_outcome(console, outcome, project_root=project_root)
+        if (
+            outcome.status == "error"
+            and "DEEPSEEK_API_KEY is not set" in outcome.reason
+        ):
+            console.print(
+                "[red]DEEPSEEK_API_KEY is not set; no candidate was generated.[/red]"
+            )
+            return 2
+        return 0 if outcome.status in {"promoted", "no_change"} else 1
 
     if not args.resume and not args.question:
         console.print("[red]A research question is required unless --resume is set.[/red]")

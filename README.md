@@ -44,10 +44,13 @@ uv run momentum-research-agent "Is the recent NVDA selloff a momentum crash sign
 
 uv run momentum-research-agent --mode single "Analyze NVDA credit risk"
 
-uv run momentum-research-agent --eval
+uv run momentum-research-agent --eval       # deterministic; no DeepSeek
+uv run momentum-research-agent --improve    # at most one candidate
 ```
 
-Flags: `--mode team|single`, `--session-dir`, `--resume`, `--max-sub-agents`, `--model`, `--coordinator-model`, `--verbose`, `--eval`.
+`--eval` keeps the existing deterministic engine check and gap-ledger writeback. `--improve` runs a separate, pinned offline engine guard from the bundled fixture, evaluates recorded policy-contract checkpoints, and requests at most one schema-bound candidate only when the baseline has policy failures. `--eval` and `--improve` are mutually exclusive. The offline suite measures contract coverage, not LLM reasoning or research quality; live LLM/data evaluation and staged replanning are deferred.
+
+Flags: `--mode team|single`, `--session-dir`, `--resume`, `--max-sub-agents`, `--model`, `--coordinator-model`, `--verbose`, `--eval`, `--improve`.
 
 On startup the CLI prints a Rich banner, a decomposition table, live task-board updates during dispatch, a synthesis panel, a token/cost summary, and the session path.
 
@@ -60,6 +63,10 @@ Each run writes `reports/{YYYYMMDD}_{HHmmss}_{8-char-hex}/`, plus a cross-sessio
 | `reports/gap_ledger.jsonl` | Cross-session OPEN/CONSUMED/CLOSED gaps (deduped by `evidence_id`) |
 | `reports/prompt_evolution.json` | Runtime overlay rules from OPEN gaps (not weight training) |
 | `reports/profile_hints.md` | Appended to frozen profiles at load time |
+| `reports/policies/active.json` | Atomic pointer to the active immutable research-policy version |
+| `reports/policies/versions/{version_id}.json` | Content-addressed baseline and promoted policy versions |
+| `reports/policies/experiments/{experiment_id}.json` | Baseline, candidate, fixture fingerprints, and promotion decision for each attempted cycle |
+| `policy_snapshot.json` | Per-session version pin; resumes reuse the policy loaded at session start |
 | `task_board.json` | Full task history with timestamps |
 | `sub_reports/{task_id}_{profile}.json` | Canonical `ResearchReport` (Evidence[]) |
 | `sub_reports/{task_id}_{profile}.md` | Human-readable rendering of the same report |
@@ -68,6 +75,16 @@ Each run writes `reports/{YYYYMMDD}_{HHmmss}_{8-char-hex}/`, plus a cross-sessio
 | `synthesis.md` / `synthesis.json` | Final PM brief |
 
 `--resume` reloads JSON reports first. Markdown-only leftovers from older sessions become a low-confidence compatibility report.
+
+Policy is non-authoritative guidance. It may affect only research prompt overlays, gap-task additions, and selection among tools already authorized for a research profile. It cannot add tools or profiles, change deterministic signals, or guide the verifier. Committed profile Markdown stays frozen, and the verifier never loads policy overlays. A research session snapshots the active version once at startup; an improvement completed during that session does not change the running or resumed session.
+
+To roll back, choose a known prior ID from `reports/policies/versions/` and use the validating store helper, which refuses missing or corrupt versions:
+
+```bash
+PYTHONPATH=src python -c 'from pathlib import Path; from momentum_research_agent.state.policies import PolicyStore; PolicyStore(Path.cwd()).activate("<prior-version-id>")'
+```
+
+`--improve` uses `reports/policies/improvement.lock` to prevent overlapping cycles. If an interrupted process leaves it behind, first confirm that no improvement process is running; only then remove that single stale lock file and retry.
 
 ## Runtime bounds
 

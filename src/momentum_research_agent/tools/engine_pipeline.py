@@ -16,6 +16,21 @@ QUERY_TIMEOUT_S = 8.0
 WARM_TIMEOUT_S = 90.0
 FROZEN_AS_OF = ("2026-05-29", "2026-06-30")
 DISABLE_ENV = "MOMENTUM_DISABLE_PIPELINE"
+_OFFLINE_RUNNER = """
+import runpy
+import socket
+import sys
+import urllib.request
+
+def blocked(*args, **kwargs):
+    raise RuntimeError("network disabled for offline engine evaluation")
+
+socket.create_connection = blocked
+socket.socket.connect = blocked
+urllib.request.urlopen = blocked
+script = sys.argv.pop(1)
+runpy.run_path(script, run_name="__main__")
+"""
 
 
 @dataclass(frozen=True)
@@ -137,10 +152,18 @@ def run_pipeline(
     project_root: Path | None = None,
     timeout_s: float = QUERY_TIMEOUT_S,
     cache_dir: Path | None = None,
+    engine_root: Path | None = None,
+    offline: bool = False,
 ) -> PipelineRun:
     """Execute scripts/run_monitor.py → run_mvp. Does not read structured_snapshot.json."""
     started = time.monotonic()
-    root = resolve_pipeline_root(project_root)
+    root = (
+        Path(engine_root).resolve()
+        if engine_root is not None
+        else resolve_pipeline_root(project_root)
+    )
+    if root is not None and not _has_monitor_entry(root):
+        root = None
     if root is None:
         return PipelineRun(False, None, "pipeline root unavailable", False, None, 0.0)
     cache = (
@@ -154,15 +177,18 @@ def run_pipeline(
     script = root / "scripts" / "run_monitor.py"
     cache.parent.mkdir(parents=True, exist_ok=True)
     try:
+        command = [
+            sys.executable,
+            str(script),
+            "--as-of-date",
+            as_of,
+            "--output-json",
+            str(cache),
+        ]
+        if offline:
+            command = [sys.executable, "-c", _OFFLINE_RUNNER, *command[1:]]
         proc = subprocess.run(
-            [
-                sys.executable,
-                str(script),
-                "--as-of-date",
-                as_of,
-                "--output-json",
-                str(cache),
-            ],
+            command,
             cwd=str(root),
             capture_output=True,
             text=True,

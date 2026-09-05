@@ -6,12 +6,15 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from momentum_research_agent.coordinator.gap_seed import append_gaps
 from momentum_research_agent.eval.policy_suite import CaseResult
 from momentum_research_agent.models.schemas import GapEntry, GapKind
 from momentum_research_agent.state.prompt_memory import refresh_profile_hints
+from momentum_research_agent.tools.engine_contract import verify_live_delivery
+from momentum_research_agent.tools.engine_pipeline import WARM_TIMEOUT_S, run_pipeline
 from momentum_research_agent.tools.engine_query import engine_query
 from momentum_research_agent.tools.registry import ToolContext, set_tool_context
 
@@ -24,6 +27,8 @@ class EvalCase:
     expect_pipeline: bool
     expect_verdict: str
     expect_risk_state: str | None = None
+    expect_fingerprint: str | None = None
+    expect_delivery_hash: str | None = None
 
 
 CASES = (
@@ -34,6 +39,8 @@ CASES = (
         expect_pipeline=True,
         expect_verdict="pass",
         expect_risk_state="normal",
+        expect_fingerprint="a3fed64fc1d0d687",
+        expect_delivery_hash="1a2d3c95609db4f7",
     ),
 )
 
@@ -60,6 +67,27 @@ def _failures_from_result(case: EvalCase, payload: dict[str, Any] | None, error:
     if case.expect_risk_state and payload.get("risk_state") != case.expect_risk_state:
         problems.append(
             f"risk_state {payload.get('risk_state')!r} != {case.expect_risk_state!r}"
+        )
+    if payload.get("as_of") != case.end:
+        problems.append(f"as_of {payload.get('as_of')!r} != {case.end!r}")
+    if (
+        contract.get("as_of") != case.end
+        or contract.get("requested_as_of") != case.end
+    ):
+        problems.append("V_D as-of fields do not match the pinned case")
+    fingerprint = str(contract.get("fingerprint") or "")
+    if len(fingerprint) < 8 or fingerprint != payload.get("full_run_fingerprint"):
+        problems.append("V_D fingerprint is missing or inconsistent")
+    if case.expect_fingerprint and fingerprint != case.expect_fingerprint:
+        problems.append(
+            f"fingerprint {fingerprint!r} != {case.expect_fingerprint!r}"
+        )
+    delivery_hash = str(contract.get("delivery_hash") or "")
+    if not delivery_hash or delivery_hash != payload.get("delivery_hash"):
+        problems.append("V_D delivery hash is missing or inconsistent")
+    if case.expect_delivery_hash and delivery_hash != case.expect_delivery_hash:
+        problems.append(
+            f"delivery hash {delivery_hash!r} != {case.expect_delivery_hash!r}"
         )
     if not problems:
         return []
@@ -109,6 +137,49 @@ async def run_eval(project_root: Path) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for case in CASES:
         results.append(await run_eval_case(case, project_root))
+    return results
+
+
+async def run_offline_engine_eval(root: Path) -> list[dict[str, Any]]:
+    """Run pinned engine guards against one explicit fixture root, with no fallback."""
+    results: list[dict[str, Any]] = []
+    with TemporaryDirectory(prefix="momentum-offline-engine-") as raw_cache:
+        cache_dir = Path(raw_cache)
+        for case in CASES:
+            run = await asyncio.to_thread(
+                run_pipeline,
+                case.end,
+                timeout_s=WARM_TIMEOUT_S,
+                cache_dir=cache_dir,
+                engine_root=root,
+                offline=True,
+            )
+            if not run.ok or run.assessment is None:
+                payload = None
+                error = run.error or "offline engine wrote no assessment"
+            else:
+                contract = verify_live_delivery(run.assessment, case.end)
+                payload = {
+                    "as_of": str(run.assessment.get("as_of_date") or "")[:10],
+                    "risk_state": run.assessment.get("overall_risk_state"),
+                    "pipeline_run": contract.pipeline_run,
+                    "full_run_fingerprint": run.assessment.get(
+                        "full_run_fingerprint"
+                    ),
+                    "delivery_hash": contract.delivery_hash,
+                    "delivery_contract": contract.model_dump(mode="json"),
+                }
+                error = None
+            gaps = _failures_from_result(case, payload, error)
+            results.append(
+                {
+                    "case_id": case.case_id,
+                    "ok": not gaps,
+                    "payload": payload,
+                    "error": error,
+                    "gaps": [item.model_dump(mode="json") for item in gaps],
+                }
+            )
     return results
 
 

@@ -1,0 +1,36 @@
+[
+  {
+    "case_id": "trajectory:stale-engine",
+    "profile": "momentum_analyst",
+    "capability": "engine_freshness",
+    "observation": "{\n  \"as_of\": \"2026-05-29\",\n  \"as_of_match\": true,\n  \"conditional_crash_frequency\": null,\n  \"crowding_score\": 0.96,\n  \"dm_bear_market_indicator\": false,\n  \"end\": \"2026-05-29\",\n  \"mechanism_scores\": {\n    \"crowded_unwind\": 96\n  },\n  \"mechanism_statuses\": {\n    \"bear_market_recovery_crash\": \"watch\",\n    \"crowded_theme_unwind\": \"triggered\"\n  },\n  \"note\": \"File adapter over momentum-tail-risk-monitor outputs.\",\n  \"pm_posture\": \"escalate_for_pm_review\",\n  \"regime\": \"FRAGILITY_BUILDING\",\n  \"risk_state\": \"normal\",\n  \"scope\": \"market_or_book\",\n  \"source\": \"momentum-tail-risk-monitor\",\n  \"source_path\": \"/Users/v/Desktop/momentum-tail-risk-monitor/outputs/latest_assessment.json\",\n  \"start\": null,\n  \"ticker\": \"NVDA\",\n  \"ticker_mentions\": [\n    \"theme_cluster\"\n  ]\n}",
+    "observation_provenance": "Recorded observation from examples/nvda_momentum_gap_ledger.json traces[0]; synthetic checkpoint requirements assert policy contract coverage only, not an observed model run.",
+    "source_trace_id": "253ccb48",
+    "observation_sha256": "df8294e556e41e1604e51f612415635e687ca9a4e4a8c81aac20d018cfeca2ac",
+    "required_overlay_terms": ["explicit as-of"],
+    "required_task_terms": ["do not retry"],
+    "required_tools": ["engine_query"]
+  },
+  {
+    "case_id": "trajectory:source-quality",
+    "profile": "technicals_analyst",
+    "capability": "source_quality",
+    "observation": "1. NVIDIA Announces Financial Results for First Quarter Fiscal 2027\n   https://nvidianews.nvidia.com/\n   Revenue and data-center growth beat; no unwind language.\n\n2. Tech stocks see largest hedge fund selloff in decade\n   https://www.investing.com/\n   Goldman prime-book crowding in AI/tech.",
+    "observation_provenance": "Recorded observation from examples/nvda_momentum_gap_ledger.json traces[1]; synthetic checkpoint requirements assert policy contract coverage only, not an observed model run.",
+    "source_trace_id": "4a25c241",
+    "observation_sha256": "0aad5712aa424c25189cdae6b3c05d569c03e500246bea92ba3484b7d3dabf8b",
+    "required_overlay_terms": ["primary source"],
+    "required_task_terms": ["primary filing"],
+    "required_tools": ["web_search"]
+  },
+  {
+    "case_id": "trajectory:crowding-web-search",
+    "profile": "flow_analyst",
+    "capability": "crowding",
+    "observation": "1. NVIDIA Announces Financial Results for First Quarter Fiscal 2027\n   https://nvidianews.nvidia.com/\n   Revenue and data-center growth beat; no unwind language.\n\n2. Tech stocks see largest hedge fund selloff in decade\n   https://www.investing.com/\n   Goldman prime-book crowding in AI/tech.",
+    "observation_provenance": "Recorded observation from examples/nvda_momentum_gap_ledger.json traces[1]; synthetic checkpoint requirements assert policy contract coverage only, not an observed model run.",
+    "source_trace_id": "4a25c241",
+    "observation_sha256": "0aad5712aa424c25189cdae6b3c05d569c03e500246bea92ba3484b7d3dabf8b",
+    "required_tools": ["web_search"]
+  }
+]

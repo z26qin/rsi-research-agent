@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from momentum_research_agent.coordinator.gap_seed import append_gaps
+from momentum_research_agent.eval.policy_suite import CaseResult
 from momentum_research_agent.models.schemas import GapEntry, GapKind
 from momentum_research_agent.state.prompt_memory import refresh_profile_hints
 from momentum_research_agent.tools.engine_query import engine_query
@@ -113,3 +114,44 @@ async def run_eval(project_root: Path) -> list[dict[str, Any]]:
 
 def run_eval_sync(project_root: Path) -> list[dict[str, Any]]:
     return asyncio.run(run_eval(project_root))
+
+
+def engine_case_results(results: list[dict[str, Any]]) -> list[CaseResult]:
+    """Adapt frozen eval outcomes into fail-closed engine guard results."""
+    cases: list[CaseResult] = []
+    for index, result in enumerate(results):
+        case_id = result.get("case_id")
+        valid_case_id = isinstance(case_id, str) and bool(case_id.strip())
+        valid_payload = isinstance(result.get("payload"), dict)
+        valid_gaps = isinstance(result.get("gaps"), list)
+        no_gaps = valid_gaps and not result["gaps"]
+        passed = (
+            valid_case_id
+            and result.get("ok") is True
+            and valid_payload
+            and result.get("error") is None
+            and no_gaps
+        )
+        resolved_case_id = case_id if valid_case_id else f"engine:invalid-{index}"
+        if passed:
+            failures: list[str] = []
+        elif not valid_payload:
+            failures = ["invalid engine eval payload"]
+        elif not valid_case_id or not valid_gaps:
+            failures = ["invalid engine eval result"]
+        elif result.get("error"):
+            failures = [f"engine eval failed: {result['error']}"]
+        elif result["gaps"]:
+            failures = ["engine eval reported gaps"]
+        else:
+            failures = ["engine eval did not pass"]
+        cases.append(
+            CaseResult(
+                case_id=resolved_case_id,
+                layer="engine",
+                passed=passed,
+                score=1.0 if passed else 0.0,
+                failures=failures,
+            )
+        )
+    return cases

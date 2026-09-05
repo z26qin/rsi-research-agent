@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -145,3 +146,50 @@ def test_version_write_refuses_payload_collision(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="different payload"):
         store.write_version(policy)
+
+
+def test_interrupted_bootstrap_reuses_the_existing_empty_baseline(tmp_path: Path) -> None:
+    store = PolicyStore(tmp_path)
+    baseline = store.load_active()
+    store.active_path.unlink()
+
+    resumed = store.load_active()
+
+    assert resumed == baseline
+    assert store.load_version(baseline.version_id) == baseline
+
+
+def test_version_store_rejects_mismatched_and_tampered_content_ids(tmp_path: Path) -> None:
+    store = PolicyStore(tmp_path)
+    baseline = store.load_active()
+    mismatched = baseline.model_copy(update={"version_id": "0" * 12})
+
+    with pytest.raises(ValueError, match="version_id"):
+        store.write_version(mismatched)
+
+    payload = json.loads(store.version_path(baseline.version_id).read_text(encoding="utf-8"))
+    payload["version_id"] = "0" * 12
+    store.version_path(baseline.version_id).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="version_id"):
+        store.load_version(baseline.version_id)
+
+
+@pytest.mark.parametrize("identifier", ["../outside", "nested/file", "bad name"])
+def test_store_rejects_unsafe_artifact_identifiers(tmp_path: Path, identifier: str) -> None:
+    store = PolicyStore(tmp_path)
+
+    with pytest.raises(ValueError):
+        store.write_experiment(identifier, {"status": "rejected"})
+
+
+def test_store_requires_a_canonical_version_id(tmp_path: Path) -> None:
+    store = PolicyStore(tmp_path)
+
+    with pytest.raises(ValueError, match="version_id"):
+        store.load_version("short")
+
+    path = store.write_experiment("candidate-a", {"status": "rejected"})
+    assert path.name == "candidate-a.json"

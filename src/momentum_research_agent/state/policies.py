@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Collection, Mapping
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from momentum_research_agent.models.schemas import MomentumCapability, utcnow
 
 MAX_POLICY_TEXT_LENGTH = 2_000
+VERSION_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+EXPERIMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 class ToolPolicy(BaseModel):
@@ -75,6 +78,25 @@ def _version_id(
         ensure_ascii=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+
+def _expected_version_id(policy: ResearchPolicy) -> str:
+    patch = PolicyPatch(
+        prompt_overlays=policy.prompt_overlays,
+        task_templates=policy.task_templates,
+        tool_policies=policy.tool_policies,
+    )
+    return _version_id(patch, policy.parent_version_id, policy.trigger_ids)
+
+
+def _validate_version_id(version_id: str) -> None:
+    if not VERSION_ID_RE.fullmatch(version_id):
+        raise ValueError("version_id must be 12 lowercase hexadecimal characters")
+
+
+def _validate_experiment_id(experiment_id: str) -> None:
+    if not EXPERIMENT_ID_RE.fullmatch(experiment_id):
+        raise ValueError("experiment_id must be a safe filename identifier")
 
 
 def _check_text(value: str, label: str) -> None:
@@ -185,6 +207,7 @@ class PolicyStore:
         self.active_path = self.root / "active.json"
 
     def version_path(self, version_id: str) -> Path:
+        _validate_version_id(version_id)
         return self.versions_path / f"{version_id}.json"
 
     @staticmethod
@@ -202,6 +225,10 @@ class PolicyStore:
         tmp.replace(path)
 
     def write_version(self, policy: ResearchPolicy) -> Path:
+        _validate_version_id(policy.version_id)
+        expected_version_id = _expected_version_id(policy)
+        if policy.version_id != expected_version_id:
+            raise ValueError("version_id does not match canonical policy content")
         path = self.version_path(policy.version_id)
         text = self._json_text(policy.model_dump(mode="json"))
         if path.exists():
@@ -212,15 +239,26 @@ class PolicyStore:
         return path
 
     def load_version(self, version_id: str) -> ResearchPolicy:
+        _validate_version_id(version_id)
         payload = json.loads(self.version_path(version_id).read_text(encoding="utf-8"))
-        return ResearchPolicy.model_validate(payload)
+        policy = ResearchPolicy.model_validate(payload)
+        _validate_version_id(policy.version_id)
+        if policy.version_id != version_id or policy.version_id != _expected_version_id(policy):
+            raise ValueError("version_id does not match canonical policy content")
+        return policy
 
     def load_active(self) -> ResearchPolicy:
         if not self.active_path.exists():
             baseline_patch = PolicyPatch()
+            baseline_version_id = _version_id(baseline_patch, None, [])
+            baseline_path = self.version_path(baseline_version_id)
+            if baseline_path.exists():
+                baseline = self.load_version(baseline_version_id)
+                self.activate(baseline.version_id)
+                return baseline
             baseline = ResearchPolicy(
                 **baseline_patch.model_dump(),
-                version_id=_version_id(baseline_patch, None, []),
+                version_id=baseline_version_id,
             )
             self.write_version(baseline)
             self.activate(baseline.version_id)
@@ -229,10 +267,14 @@ class PolicyStore:
         return self.load_version(pointer["version_id"])
 
     def activate(self, version_id: str) -> None:
-        self.load_version(version_id)
+        try:
+            self.load_version(version_id)
+        except ValueError as error:
+            raise FileNotFoundError(version_id) from error
         self._atomic_write(self.active_path, self._json_text({"version_id": version_id}))
 
     def write_experiment(self, experiment_id: str, payload: Mapping[str, Any]) -> Path:
+        _validate_experiment_id(experiment_id)
         path = self.experiments_path / f"{experiment_id}.json"
         self._atomic_write(path, self._json_text(dict(payload)))
         return path

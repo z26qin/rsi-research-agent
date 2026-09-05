@@ -87,6 +87,10 @@ def one_failure_bundle(tmp_path: Path, *, observation: str = "engine_query used 
         active_policy=PolicyStore(tmp_path).load_active(),
         failed_case_ids=["trajectory:stale-engine"],
         case_failures={"trajectory:stale-engine": ["overlay:explicit as-of"]},
+        case_profiles={"trajectory:stale-engine": "momentum_analyst"},
+        case_capabilities={
+            "trajectory:stale-engine": MomentumCapability.ENGINE_FRESHNESS
+        },
         recorded_observations={"trajectory:stale-engine": observation},
     )
 
@@ -141,15 +145,23 @@ def regressing_patch() -> PolicyPatch:
 def test_failure_bundle_keeps_only_failed_cases_and_truncates_observations(
     tmp_path: Path,
 ) -> None:
+    opaque_case_id = "recording:opaque-17"
     cases = [
-        stale_engine_case().model_copy(update={"observation": "x" * 1_100}),
+        stale_engine_case().model_copy(
+            update={
+                "case_id": opaque_case_id,
+                "profile": "flow_analyst",
+                "capability": MomentumCapability.CROWDING,
+                "observation": "x" * 1_100,
+            }
+        ),
         passing_guard_case(),
     ]
     suite = SuiteResult(
         cases=[
             *passing_engine_results(),
             CaseResult(
-                case_id="trajectory:stale-engine",
+                case_id=opaque_case_id,
                 layer="trajectory",
                 passed=False,
                 score=0.0,
@@ -170,13 +182,15 @@ def test_failure_bundle_keeps_only_failed_cases_and_truncates_observations(
         trajectory_cases=cases,
     )
 
-    assert bundle.failed_case_ids == ["trajectory:stale-engine"]
+    assert bundle.failed_case_ids == [opaque_case_id]
     assert bundle.case_failures == {
-        "trajectory:stale-engine": ["overlay:explicit as-of"]
+        opaque_case_id: ["overlay:explicit as-of"]
     }
-    assert bundle.recorded_observations == {
-        "trajectory:stale-engine": "x" * 1_000
+    assert bundle.case_profiles == {opaque_case_id: "flow_analyst"}
+    assert bundle.case_capabilities == {
+        opaque_case_id: MomentumCapability.CROWDING
     }
+    assert bundle.recorded_observations == {opaque_case_id: "x" * 1_000}
 
 
 @pytest.mark.asyncio
@@ -356,6 +370,92 @@ async def test_generator_error_fails_closed(tmp_path: Path) -> None:
     assert "model unavailable" in outcome.reason
     assert store.load_active().version_id == baseline_id
     assert generator.calls == 1
+    assert outcome.experiment_id
+    experiment = json.loads(
+        (store.experiments_path / f"{outcome.experiment_id}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert experiment["status"] == "error"
+    assert experiment["phase"] == "generation"
+    assert experiment["generation_model"] == "raising-policy-model"
+    assert experiment["baseline_policy"]["version_id"] == baseline_id
+    assert experiment["baseline"]["cases"][1]["passed"] is False
+    assert experiment["failure_bundle"]["case_profiles"] == {
+        "trajectory:stale-engine": "momentum_analyst"
+    }
+    assert experiment["generated_patch"] is None
+    assert experiment["candidate_policy"] is None
+
+
+@pytest.mark.asyncio
+async def test_candidate_evaluation_error_records_available_candidate_and_keeps_active(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PolicyStore(tmp_path)
+    baseline_id = store.load_active().version_id
+    from momentum_research_agent.eval import policy_improver
+
+    real_evaluate = policy_improver.evaluate_policy
+    calls = 0
+
+    def fail_candidate_evaluation(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("candidate fixture exploded")
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(policy_improver, "evaluate_policy", fail_candidate_evaluation)
+
+    outcome = await run_improvement_cycle(
+        tmp_path,
+        generator=FakeGenerator(fixing_patch()),
+        engine_results=passing_engine_results(),
+        provider=FakeProvider([stale_engine_case()]),
+    )
+
+    assert outcome.status == "error"
+    assert outcome.experiment_id
+    assert store.load_active().version_id == baseline_id
+    experiment = json.loads(
+        (store.experiments_path / f"{outcome.experiment_id}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert experiment["phase"] == "candidate_evaluation"
+    assert experiment["generated_patch"]["prompt_overlays"]["momentum_analyst"]
+    assert experiment["candidate_policy"]["parent_version_id"] == baseline_id
+    assert experiment["candidate"] is None
+
+
+@pytest.mark.asyncio
+async def test_error_experiment_write_failure_is_reported_with_allocated_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PolicyStore(tmp_path)
+    baseline_id = store.load_active().version_id
+
+    def fail_write(self: PolicyStore, experiment_id: str, payload: dict) -> Path:
+        del self, experiment_id, payload
+        raise OSError("experiment disk full")
+
+    monkeypatch.setattr(PolicyStore, "write_experiment", fail_write)
+
+    outcome = await run_improvement_cycle(
+        tmp_path,
+        generator=RaisingGenerator(RuntimeError("model unavailable")),
+        engine_results=passing_engine_results(),
+        provider=FakeProvider([stale_engine_case()]),
+    )
+
+    assert outcome.status == "error"
+    assert outcome.experiment_id
+    assert "model unavailable" in outcome.reason
+    assert "experiment write failed: experiment disk full" in outcome.reason
+    assert store.load_active().version_id == baseline_id
 
 
 @pytest.mark.asyncio

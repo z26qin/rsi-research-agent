@@ -24,7 +24,11 @@ from momentum_research_agent.eval.policy_suite import (
     compare_for_promotion,
     evaluate_policy,
 )
-from momentum_research_agent.models.schemas import GapEntry, parse_model_json
+from momentum_research_agent.models.schemas import (
+    GapEntry,
+    MomentumCapability,
+    parse_model_json,
+)
 from momentum_research_agent.state.policies import (
     PolicyEvaluation,
     PolicyPatch,
@@ -49,6 +53,8 @@ class FailureBundle(BaseModel):
     active_policy: ResearchPolicy
     failed_case_ids: list[str]
     case_failures: dict[str, list[str]]
+    case_profiles: dict[str, str]
+    case_capabilities: dict[str, MomentumCapability]
     verifier_gaps: list[GapEntry] = Field(default_factory=list)
     recorded_observations: dict[str, str] = Field(default_factory=dict)
 
@@ -86,6 +92,12 @@ def build_failure_bundle(
             case.case_id: list(case.failures)
             for case in failed
             if case.case_id in recorded_by_id
+        },
+        case_profiles={
+            case_id: recorded_by_id[case_id].profile for case_id in failed_ids
+        },
+        case_capabilities={
+            case_id: recorded_by_id[case_id].capability for case_id in failed_ids
         },
         recorded_observations={
             case_id: recorded_by_id[case_id].observation[:1_000]
@@ -228,6 +240,90 @@ def _error_outcome(
     )
 
 
+def _experiment_payload(
+    *,
+    status: str,
+    phase: str,
+    reason: str,
+    active: ResearchPolicy,
+    baseline: SuiteResult,
+    bundle: FailureBundle,
+    fixture_fingerprints: dict[str, dict[str, str]],
+    generation_model: str,
+    patch: PolicyPatch | None = None,
+    candidate_policy: ResearchPolicy | None = None,
+    candidate_suite: SuiteResult | None = None,
+    decision: BaseModel | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "phase": phase,
+        "reason": reason,
+        "baseline": baseline.model_dump(mode="json"),
+        "candidate": (
+            candidate_suite.model_dump(mode="json")
+            if candidate_suite is not None
+            else None
+        ),
+        "baseline_policy": active.model_dump(mode="json"),
+        "candidate_policy": (
+            candidate_policy.model_dump(mode="json")
+            if candidate_policy is not None
+            else None
+        ),
+        "failure_bundle": bundle.model_dump(mode="json"),
+        "generated_patch": patch.model_dump(mode="json") if patch is not None else None,
+        "decision": decision.model_dump(mode="json") if decision is not None else None,
+        "fixture_fingerprints": fixture_fingerprints,
+        "generation_model": generation_model,
+    }
+
+
+def _record_cycle_error(
+    *,
+    store: PolicyStore,
+    experiment_id: str,
+    phase: str,
+    reason: str,
+    active: ResearchPolicy,
+    baseline: SuiteResult,
+    bundle: FailureBundle,
+    fixture_fingerprints: dict[str, dict[str, str]],
+    generation_model: str,
+    patch: PolicyPatch | None = None,
+    candidate_policy: ResearchPolicy | None = None,
+    candidate_suite: SuiteResult | None = None,
+) -> ImprovementOutcome:
+    payload = _experiment_payload(
+        status="error",
+        phase=phase,
+        reason=reason,
+        active=active,
+        baseline=baseline,
+        bundle=bundle,
+        fixture_fingerprints=fixture_fingerprints,
+        generation_model=generation_model,
+        patch=patch,
+        candidate_policy=candidate_policy,
+        candidate_suite=candidate_suite,
+    )
+    outcome_reason = reason
+    try:
+        store.write_experiment(experiment_id, payload)
+    except Exception as write_error:
+        outcome_reason = f"{reason}; experiment write failed: {write_error}"
+    return _error_outcome(
+        previous_version_id=active.version_id,
+        baseline=baseline,
+        candidate_version_id=(
+            candidate_policy.version_id if candidate_policy is not None else None
+        ),
+        experiment_id=experiment_id,
+        candidate=candidate_suite,
+        reason=outcome_reason,
+    )
+
+
 async def _run_locked_cycle(
     project_root: Path,
     *,
@@ -282,41 +378,72 @@ async def _run_locked_cycle(
         suite=baseline,
         trajectory_cases=trajectory_cases,
     )
+    experiment_id = _experiment_id()
+    generation_model = str(getattr(generator, "model", type(generator).__name__))
+    fixture_fingerprints = _fixture_fingerprints(engine_results, trajectory_cases)
+    patch: PolicyPatch | None = None
+    candidate_policy: ResearchPolicy | None = None
+    candidate_suite: SuiteResult | None = None
+    phase = "generation"
     try:
         patch = await generator.generate(bundle)
-        profile_tools = _research_profile_tools()
-        validate_policy(patch, profile_tools)
+        phase = "patch_validation"
+        validate_policy(patch, _research_profile_tools())
+        phase = "candidate_merge"
         candidate_policy = merge_policy_patch(active, patch, trigger_ids=failed_ids)
-        validate_policy(candidate_policy, profile_tools)
+        phase = "candidate_validation"
+        validate_policy(candidate_policy, _research_profile_tools())
+        phase = "candidate_evaluation"
         candidate_suite = evaluate_policy(
             candidate_policy,
             engine_results=engine_results,
             trajectory_cases=trajectory_cases,
         )
+        phase = "comparison"
         decision = compare_for_promotion(
             baseline,
             candidate_suite,
             trigger_ids=set(failed_ids),
         )
     except Exception as error:
-        return _error_outcome(
-            previous_version_id=active.version_id,
+        phase_label = {
+            "generation": "candidate generation",
+            "patch_validation": "generated patch validation",
+            "candidate_merge": "candidate merge",
+            "candidate_validation": "merged candidate validation",
+            "candidate_evaluation": "candidate evaluation",
+            "comparison": "candidate comparison",
+        }[phase]
+        return _record_cycle_error(
+            store=store,
+            experiment_id=experiment_id,
+            phase=phase,
+            reason=f"candidate {phase_label} failed: {error}",
+            active=active,
             baseline=baseline,
-            reason=f"candidate evaluation failed: {error}",
+            bundle=bundle,
+            fixture_fingerprints=fixture_fingerprints,
+            generation_model=generation_model,
+            patch=patch,
+            candidate_policy=candidate_policy,
+            candidate_suite=candidate_suite,
         )
 
-    experiment_id = _experiment_id()
-    generation_model = str(getattr(generator, "model", type(generator).__name__))
-    experiment = {
-        "baseline": baseline.model_dump(mode="json"),
-        "candidate": candidate_suite.model_dump(mode="json"),
-        "baseline_policy": active.model_dump(mode="json"),
-        "candidate_policy": candidate_policy.model_dump(mode="json"),
-        "generated_patch": patch.model_dump(mode="json"),
-        "decision": decision.model_dump(mode="json"),
-        "fixture_fingerprints": _fixture_fingerprints(engine_results, trajectory_cases),
-        "generation_model": generation_model,
-    }
+    assert patch is not None and candidate_policy is not None and candidate_suite is not None
+    experiment = _experiment_payload(
+        status="promoted" if decision.promote else "rejected",
+        phase="decision",
+        reason=decision.reason,
+        active=active,
+        baseline=baseline,
+        bundle=bundle,
+        fixture_fingerprints=fixture_fingerprints,
+        generation_model=generation_model,
+        patch=patch,
+        candidate_policy=candidate_policy,
+        candidate_suite=candidate_suite,
+        decision=decision,
+    )
     try:
         store.write_experiment(experiment_id, experiment)
     except Exception as error:
@@ -324,6 +451,7 @@ async def _run_locked_cycle(
             previous_version_id=active.version_id,
             baseline=baseline,
             candidate_version_id=candidate_policy.version_id,
+            experiment_id=experiment_id,
             candidate=candidate_suite,
             reason=f"experiment write failed: {error}",
         )
@@ -357,13 +485,19 @@ async def _run_locked_cycle(
         except Exception:
             activated = False
         if not activated:
-            return _error_outcome(
-                previous_version_id=active.version_id,
-                baseline=baseline,
-                candidate_version_id=evaluated_policy.version_id,
+            return _record_cycle_error(
+                store=store,
                 experiment_id=experiment_id,
-                candidate=candidate_suite,
+                phase="activation",
                 reason=f"candidate activation failed: {error}",
+                active=active,
+                baseline=baseline,
+                bundle=bundle,
+                fixture_fingerprints=fixture_fingerprints,
+                generation_model=generation_model,
+                patch=patch,
+                candidate_policy=evaluated_policy,
+                candidate_suite=candidate_suite,
             )
 
     reason = decision.reason

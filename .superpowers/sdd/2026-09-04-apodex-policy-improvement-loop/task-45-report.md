@@ -98,3 +98,30 @@ experiment IDs or files. After the correction:
 - `git diff --check` — clean before commit.
 
 Review-fix commit: `9c34ab8 fix: preserve failed policy experiments`.
+
+## Final Review: Promotion Audit Finalization
+
+The pre-activation experiment previously used `status: promoted`, so an
+`asyncio.CancelledError` during version activation propagated correctly but
+left a false promoted audit record while the baseline pointer remained active.
+Accepted candidates are now first persisted as `approved` in the
+`promotion_pending` phase. Only after the active pointer confirms the candidate
+does the same experiment finalize to `promoted` in the `activated` phase.
+
+If that final audit write fails after activation, the cycle preserves the
+truthful `promoted` outcome and adds an audit-finalization warning. The earlier
+approved record remains on disk rather than falsely claiming a completed audit
+update. The interrupted-activation regression test now checks both the baseline
+pointer and the non-promoted record; the successful path checks the finalized
+status. The historical `git diff --check 9f1afec..HEAD` trailing blank in the
+Task 0 report was also removed.
+
+The three new assertions/tests were RED before the state transition was added:
+the successful record remained in the `decision` phase, cancellation left
+`status: promoted`, and no second audit write existed to exercise the warning
+path. After the correction:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/aaronqin/Desktop/rsi-research-agent/.worktrees/apodex-policy-loop/.venv/bin/python -m pytest tests/test_policy_improver.py tests/test_policy_suite.py tests/test_policies.py -q` — 44 passed.
+- `git diff --check 9f1afec..HEAD` — clean after commit.
+
+Final review-fix commit: `3a3e480 fix: finalize promotion audit after activation`.

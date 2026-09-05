@@ -430,9 +430,10 @@ async def _run_locked_cycle(
         )
 
     assert patch is not None and candidate_policy is not None and candidate_suite is not None
+    promotion_pending = decision.promote
     experiment = _experiment_payload(
-        status="promoted" if decision.promote else "rejected",
-        phase="decision",
+        status="approved" if promotion_pending else "rejected",
+        phase="promotion_pending" if promotion_pending else "decision",
         reason=decision.reason,
         active=active,
         baseline=baseline,
@@ -501,6 +502,24 @@ async def _run_locked_cycle(
             )
 
     reason = decision.reason
+    promoted_experiment = _experiment_payload(
+        status="promoted",
+        phase="activated",
+        reason=decision.reason,
+        active=active,
+        baseline=baseline,
+        bundle=bundle,
+        fixture_fingerprints=fixture_fingerprints,
+        generation_model=generation_model,
+        patch=patch,
+        candidate_policy=evaluated_policy,
+        candidate_suite=candidate_suite,
+        decision=decision,
+    )
+    try:
+        store.write_experiment(experiment_id, promoted_experiment)
+    except Exception as error:
+        reason = f"{reason}; audit finalization failed: {error}"
     try:
         refresh_profile_hints(project_root)
     except Exception as error:

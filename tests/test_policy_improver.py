@@ -327,6 +327,8 @@ async def test_cycle_promotes_one_candidate_that_fixes_target_without_regression
             encoding="utf-8"
         )
     )
+    assert experiment["status"] == "promoted"
+    assert experiment["phase"] == "activated"
     assert experiment["generation_model"] == "fake-policy-model"
     assert experiment["baseline"]["cases"][1]["passed"] is False
     assert experiment["candidate"]["cases"][1]["passed"] is True
@@ -484,6 +486,52 @@ async def test_cancelled_activation_propagates_and_keeps_baseline_active(
 
     assert store.load_active().version_id == baseline_id
     assert not (store.root / "improvement.lock").exists()
+    experiments = list(store.experiments_path.glob("*.json"))
+    assert len(experiments) == 1
+    interrupted = json.loads(experiments[0].read_text(encoding="utf-8"))
+    assert interrupted["status"] == "approved"
+    assert interrupted["phase"] == "promotion_pending"
+
+
+@pytest.mark.asyncio
+async def test_final_audit_write_failure_keeps_truthful_promoted_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_write = PolicyStore.write_experiment
+    writes = 0
+
+    def fail_final_write(
+        self: PolicyStore,
+        experiment_id: str,
+        payload: dict,
+    ) -> Path:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("audit disk full")
+        return original_write(self, experiment_id, payload)
+
+    monkeypatch.setattr(PolicyStore, "write_experiment", fail_final_write)
+
+    outcome = await run_improvement_cycle(
+        tmp_path,
+        generator=FakeGenerator(fixing_patch()),
+        engine_results=passing_engine_results(),
+        provider=FakeProvider([stale_engine_case()]),
+    )
+
+    store = PolicyStore(tmp_path)
+    assert outcome.status == "promoted"
+    assert "audit finalization failed: audit disk full" in outcome.reason
+    assert store.load_active().version_id == outcome.candidate_version_id
+    experiment = json.loads(
+        (store.experiments_path / f"{outcome.experiment_id}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert experiment["status"] == "approved"
+    assert writes == 2
 
 
 @pytest.mark.asyncio

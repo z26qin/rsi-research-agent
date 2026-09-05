@@ -26,4 +26,3 @@ After the change:
 ## Scope and concerns
 
 Only the regex mode in the production probe was changed. No signal definitions, feature-plan files, or policy-loop code were modified. This relies on the repository's Git supporting `grep -P`, which is the behavior established by the task brief and current environment.
-

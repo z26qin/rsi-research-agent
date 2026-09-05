@@ -70,3 +70,31 @@ data.
 The exclusive lock fails closed if another cycle is active. A hard process
 kill that bypasses Python cleanup can leave the small lock file in place; the
 next cycle will refuse to run rather than risk overlapping promotion.
+
+## Review Follow-up: Failed Experiment Provenance
+
+Review found that the experiment ID was allocated only after candidate
+generation and evaluation. Consequently, generator, schema/authorization,
+merge, or candidate-evaluation failures returned without an experiment record.
+The failure bundle also omitted the profile and capability associated with each
+failed trajectory case, forcing a generator to infer context from case IDs.
+
+The cycle now allocates its experiment ID immediately before the sole
+generation attempt. Each stage records its current phase, reason, baseline
+policy and suite, failed-only bundle, fixture fingerprints, generation model,
+and any patch, merged candidate policy, or candidate suite already available.
+If the error record itself cannot be written, the outcome retains the allocated
+ID and explicitly includes the persistence failure without changing the active
+policy. `FailureBundle` now carries failed-only `case_profiles` and
+`case_capabilities` mappings sourced directly from `RecordedTrajectoryCase`,
+independent of case-ID naming.
+
+The new regression tests were RED with six failures: the new bundle fields
+were rejected or absent, and generator/evaluation error outcomes had no
+experiment IDs or files. After the correction:
+
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/aaronqin/Desktop/rsi-research-agent/.worktrees/apodex-policy-loop/.venv/bin/python -m pytest tests/test_policy_improver.py -q` — 14 passed.
+- `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src /Users/aaronqin/Desktop/rsi-research-agent/.worktrees/apodex-policy-loop/.venv/bin/python -m pytest tests/test_policy_improver.py tests/test_policy_suite.py tests/test_policies.py -q` — 43 passed.
+- `git diff --check` — clean before commit.
+
+Review-fix commit: `9c34ab8 fix: preserve failed policy experiments`.

@@ -157,6 +157,15 @@ def _case_index(suite: SuiteResult, label: str) -> tuple[dict[str, CaseResult] |
     return indexed, None
 
 
+def _layer_error(suite: SuiteResult, label: str) -> str | None:
+    layers = {case.layer for case in suite.cases}
+    if "engine" not in layers:
+        return f"{label} suite has no engine guard cases"
+    if "trajectory" not in layers:
+        return f"{label} suite has no trajectory cases"
+    return None
+
+
 def compare_for_promotion(
     baseline: SuiteResult,
     candidate: SuiteResult,
@@ -171,6 +180,13 @@ def compare_for_promotion(
     if candidate_error:
         return PromotionDecision(promote=False, reason=candidate_error)
     assert baseline_cases is not None and candidate_cases is not None
+
+    baseline_layer_error = _layer_error(baseline, "baseline")
+    if baseline_layer_error:
+        return PromotionDecision(promote=False, reason=baseline_layer_error)
+    candidate_layer_error = _layer_error(candidate, "candidate")
+    if candidate_layer_error:
+        return PromotionDecision(promote=False, reason=candidate_layer_error)
 
     if set(baseline_cases) != set(candidate_cases):
         return PromotionDecision(promote=False, reason="baseline and candidate case sets differ")

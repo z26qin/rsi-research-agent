@@ -28,12 +28,20 @@ def suite_from_bools(results: dict[str, bool]) -> SuiteResult:
     return SuiteResult(
         cases=[
             CaseResult(
+                case_id="engine:guard",
+                layer="engine",
+                passed=True,
+                score=1.0,
+            ),
+            *[
+            CaseResult(
                 case_id=case_id,
                 layer="trajectory",
                 passed=passed,
                 score=1.0 if passed else 0.0,
             )
             for case_id, passed in results.items()
+            ],
         ]
     )
 
@@ -231,6 +239,7 @@ def test_promotion_rejects_ties_and_per_case_regressions(
             suite_from_bools({"target": False, "guard": True}),
             SuiteResult(
                 cases=[
+                    CaseResult(case_id="engine:guard", layer="engine", passed=True, score=1.0),
                     CaseResult(case_id="target", layer="trajectory", passed=True, score=1.0),
                     CaseResult(case_id="target", layer="trajectory", passed=True, score=1.0),
                 ]
@@ -240,6 +249,38 @@ def test_promotion_rejects_ties_and_per_case_regressions(
     ],
 )
 def test_promotion_rejects_invalid_or_incomparable_case_sets(
+    baseline: SuiteResult, candidate: SuiteResult, reason: str
+) -> None:
+    decision = compare_for_promotion(baseline, candidate, trigger_ids={"target"})
+
+    assert decision.promote is False
+    assert reason in decision.reason
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate", "reason"),
+    [
+        (
+            SuiteResult(
+                cases=[CaseResult(case_id="engine:guard", layer="engine", passed=True, score=1.0)]
+            ),
+            SuiteResult(
+                cases=[CaseResult(case_id="engine:guard", layer="engine", passed=True, score=1.0)]
+            ),
+            "no trajectory cases",
+        ),
+        (
+            SuiteResult(
+                cases=[CaseResult(case_id="target", layer="trajectory", passed=False, score=0.0)]
+            ),
+            SuiteResult(
+                cases=[CaseResult(case_id="target", layer="trajectory", passed=True, score=1.0)]
+            ),
+            "no engine guard",
+        ),
+    ],
+)
+def test_promotion_requires_engine_and_trajectory_layers(
     baseline: SuiteResult, candidate: SuiteResult, reason: str
 ) -> None:
     decision = compare_for_promotion(baseline, candidate, trigger_ids={"target"})

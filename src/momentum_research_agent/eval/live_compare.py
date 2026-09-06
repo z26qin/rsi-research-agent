@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from momentum_research_agent.agents.budget import LoopBudget
+from momentum_research_agent.agents.sub_agent import load_profile
 from momentum_research_agent.eval.replay_runner import (
     LLMRequestBudget,
     ReplayRunResult,
@@ -160,6 +161,14 @@ class CaseComparison(BaseModel):
     guard_no_regression: bool = False
 
 
+class ProfileSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile: str
+    text: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class LiveComparisonReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -178,6 +187,7 @@ class LiveComparisonReport(BaseModel):
     loop_budget: dict[str, float | int]
     baseline_policy: ResearchPolicy
     candidate_policy: ResearchPolicy
+    profile_snapshots: dict[str, ProfileSnapshot]
     cases: list[SessionEvalCase]
     expectations: BehavioralExpectationSet
     expectations_sha256: str
@@ -368,6 +378,18 @@ async def run_live_compare(
     kinds = {bound[case.case_id].kind for case in selected}
     if "target" not in kinds or "guard" not in kinds:
         raise ValueError("selected comparison requires at least one target and one guard")
+    profiles = {case.profile for case in selected}
+    if None in profiles:
+        raise ValueError("selected comparison case is missing a profile")
+    profile_snapshots: dict[str, ProfileSnapshot] = {}
+    for profile in sorted(profiles):
+        assert profile is not None
+        text = load_profile(profile, Path(project_root), apply_overlay=False)
+        profile_snapshots[profile] = ProfileSnapshot(
+            profile=profile,
+            text=text,
+            sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        )
 
     run_id = new_session_id()
     run_dir = Path(project_root) / "reports" / "live_evals" / run_id
@@ -392,6 +414,7 @@ async def run_live_compare(
                         budget=budget,
                         request_budget=request_budget,
                         max_output_tokens=max_output_tokens,
+                        base_profile_text=profile_snapshots[case.profile].text,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -506,6 +529,7 @@ async def run_live_compare(
         },
         baseline_policy=baseline_policy,
         candidate_policy=candidate_policy,
+        profile_snapshots=profile_snapshots,
         cases=selected,
         expectations=selected_expectations,
         expectations_sha256=expectations_content_sha256(selected_expectations),

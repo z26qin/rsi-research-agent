@@ -187,6 +187,7 @@ async def test_replay_runs_actual_loop_with_canonical_argument_match_and_pinned_
         ]
     )
     requests = LLMRequestBudget(max_attempts=4)
+    base_profile_text = "# Explicit frozen base profile\n"
 
     result = await run_replay_case(
         client=client,
@@ -197,6 +198,7 @@ async def test_replay_runs_actual_loop_with_canonical_argument_match_and_pinned_
         budget=LoopBudget(max_turns=3),
         request_budget=requests,
         max_output_tokens=512,
+        base_profile_text=base_profile_text,
     )
 
     assert result.outcome == "success"
@@ -211,6 +213,9 @@ async def test_replay_runs_actual_loop_with_canonical_argument_match_and_pinned_
     assert result.usage.total_tokens == 36
     assert client.retry_options == [0]
     assert all(call["max_tokens"] == 512 for call in client.calls)
+    assert client.calls[0]["messages"][0]["content"].startswith(
+        base_profile_text.rstrip()
+    )
     assert "Use replay provenance" in client.calls[0]["messages"][0]["content"]
     assert "Preferred tools for source_quality: web_search" in client.calls[0]["messages"][0]["content"]
     assert "Withhold unsupported evidence" in client.calls[0]["messages"][1]["content"]

@@ -56,13 +56,12 @@ class SessionEvalCase(BaseModel):
 
     @model_validator(mode="after")
     def validate_replay_contract(self) -> SessionEvalCase:
-        identity_parts = self.case_id.rsplit(":", 2)
-        if (
-            len(identity_parts) != 3
-            or identity_parts[-2] != self.source_directory_sha256
-            or identity_parts[-1] != self.failing_evidence.id
-        ):
-            raise ValueError("case_id does not bind its source directory and gap")
+        expected_case_id = (
+            f"session:{self.source_session_id}:{self.source_directory_sha256}:"
+            f"{self.failing_evidence.id}"
+        )
+        if self.case_id != expected_case_id:
+            raise ValueError("case_id does not bind its session, source directory, and gap")
         if self.replayable and self.replay_blockers:
             raise ValueError("a replayable case cannot have replay blockers")
         if self.replayable and not self.tool_traces:

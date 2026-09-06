@@ -258,6 +258,32 @@ def test_schema_rejects_replay_trace_owned_by_another_task(tmp_path: Path) -> No
         SessionEvalCase.model_validate(payload)
 
 
+def test_schema_binds_entire_case_identity_and_allows_colons_in_gap_id(
+    tmp_path: Path,
+) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id="identity-binding")
+    payload = import_session_cases(tmp_path, session_dir)[0].model_dump(mode="json")
+    source_hash = payload["source_directory_sha256"]
+
+    mismatched_session = dict(payload)
+    mismatched_session["case_id"] = (
+        f"session:other-session:{source_hash}:{payload['failing_evidence']['id']}"
+    )
+    with pytest.raises(ValidationError, match="case_id"):
+        SessionEvalCase.model_validate(mismatched_session)
+
+    colon_gap = json.loads(json.dumps(payload))
+    colon_gap["failing_evidence"]["id"] = "gap:with:colons"
+    colon_gap["case_id"] = (
+        f"session:{colon_gap['source_session_id']}:{source_hash}:gap:with:colons"
+    )
+
+    case = SessionEvalCase.model_validate(colon_gap)
+
+    assert case.failing_evidence.id == "gap:with:colons"
+    assert case.case_id == colon_gap["case_id"]
+
+
 def test_import_without_verification_fails_clearly(tmp_path: Path) -> None:
     session_dir = tmp_path / "reports" / "empty-session"
     session_dir.mkdir(parents=True)

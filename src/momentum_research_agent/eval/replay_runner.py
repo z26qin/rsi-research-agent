@@ -185,9 +185,16 @@ def build_replay_registry(
     return definitions, registry, calls
 
 
-def _system_prompt(project_root: Path, case: SessionEvalCase, policy: ResearchPolicy) -> str:
+def _system_prompt(
+    project_root: Path,
+    case: SessionEvalCase,
+    policy: ResearchPolicy,
+    base_profile_text: str | None,
+) -> str:
     assert case.profile is not None
-    base = load_profile(case.profile, project_root, apply_overlay=False)
+    base = base_profile_text
+    if base is None:
+        base = load_profile(case.profile, project_root, apply_overlay=False)
     overlay = compiled_overlay(policy, case.profile, case.capability)
     return f"{base.rstrip()}\n\n{overlay}\n" if overlay else base
 
@@ -216,6 +223,7 @@ async def run_replay_case(
     request_budget: LLMRequestBudget,
     max_output_tokens: int,
     temperature: float = 0.0,
+    base_profile_text: str | None = None,
 ) -> ReplayRunResult:
     """Rerun one case without allowing any live tool execution."""
     if not isinstance(max_output_tokens, int) or isinstance(max_output_tokens, bool):
@@ -270,7 +278,9 @@ async def run_replay_case(
         loop_result = await react_loop_detailed(
             client=bounded_client,
             model=requested_model,
-            system_prompt=_system_prompt(Path(project_root), case, policy),
+            system_prompt=_system_prompt(
+                Path(project_root), case, policy, base_profile_text
+            ),
             user_message=_report_instructions(task),
             tools=definitions,
             tool_registry=registry,

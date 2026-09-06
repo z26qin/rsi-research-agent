@@ -264,3 +264,78 @@ PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest -q
 git diff --check
 # exit 0
 ```
+
+## Final whole-branch review fixes
+
+Resolved the two scoped P3 findings without model or tool-network calls.
+
+### Exact imported-case identity
+
+`SessionEvalCase` now compares `case_id` against the complete expected value:
+
+```text
+session:{source_session_id}:{source_directory_sha256}:{failing_evidence.id}
+```
+
+This rejects a substituted session prefix and permits valid gap IDs containing colons.
+The prior `rsplit(":", 2)` checked only the final hash/gap-shaped suffix, so the wrong
+session prefix passed and colon-bearing gap IDs failed.
+
+RED before the validator change:
+
+```text
+test_schema_binds_entire_case_identity_and_allows_colons_in_gap_id
+Failed: DID NOT RAISE ValidationError for a mismatched source session
+```
+
+### Frozen base-profile snapshots
+
+`run_live_compare()` now loads each selected profile exactly once before dispatch and
+passes that immutable text to every baseline/candidate replay for that profile.
+`run_replay_case()` accepts the simple optional `base_profile_text`; direct callers that
+omit it retain the existing single-run load behavior. Policy overlays remain compiled
+per baseline/candidate variant on top of the same frozen base.
+
+The comparison JSON now persists `profile_snapshots`, keyed by profile, with:
+
+- exact base profile text;
+- profile name;
+- SHA-256 of the UTF-8 text.
+
+RED before snapshot injection:
+
+```text
+test_comparison_snapshots_base_profile_once_for_all_paired_prompts
+expected four identical frozen snapshots, observed none
+```
+
+The regression mutates the on-disk profile after the first paired run. All four replay
+calls still receive the original text, the direct runner uses it as the system-prompt
+base, and the persisted text/hash match that original snapshot.
+
+### Final focused and full verification
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest \
+  tests/test_session_cases.py tests/test_react_loop.py tests/test_replay_runner.py \
+  tests/test_live_compare.py tests/test_live_compare_cli.py \
+  --cov=momentum_research_agent.eval.session_cases \
+  --cov=momentum_research_agent.eval.replay_runner \
+  --cov=momentum_research_agent.eval.live_compare \
+  --cov-report=term-missing -q
+
+66 passed in 1.34s
+session_cases.py: 272 statements, 36 missed, 87% coverage
+replay_runner.py: 182 statements, 17 missed, 91% coverage
+live_compare.py: 297 statements, 51 missed, 83% coverage
+total: 86% coverage
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m compileall -q \
+  src/momentum_research_agent
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest -q
+212 passed in 1.20s
+
+git diff --check
+# exit 0
+```

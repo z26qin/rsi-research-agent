@@ -357,6 +357,75 @@ async def test_shadow_comparison_persists_self_contained_paired_runs_and_aggrega
 
 
 @pytest.mark.asyncio
+async def test_comparison_snapshots_base_profile_once_for_all_paired_prompts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = tmp_path / "profiles" / "flow_analyst.md"
+    profile_path.parent.mkdir()
+    original_profile = "# Frozen profile\n\nUse only observed evidence.\n"
+    profile_path.write_text(original_profile, encoding="utf-8")
+    target = _case(tmp_path, "target", "No support.")
+    guard = _case(
+        tmp_path,
+        "guard",
+        '{"url":"https://example.test/filing","snippet":"Synthetic filing evidence."}',
+    )
+    store = PolicyStore(tmp_path)
+    baseline = store.load_active()
+    candidate = merge_policy_patch(
+        baseline,
+        PolicyPatch(prompt_overlays={"flow_analyst": "Candidate guidance."}),
+        trigger_ids=[target.case_id],
+    )
+    observed_snapshots: list[str] = []
+
+    async def fake_run_replay_case(**kwargs):
+        observed_snapshots.append(kwargs["base_profile_text"])
+        if len(observed_snapshots) == 1:
+            profile_path.write_text("# Mutated during comparison\n", encoding="utf-8")
+        kwargs["request_budget"].claim()
+        shape = "withhold" if kwargs["case"].case_id == target.case_id else "grounded"
+        return _run(kwargs["case"], kwargs["policy"].version_id, passed_shape=shape)
+
+    monkeypatch.setattr(
+        "momentum_research_agent.eval.live_compare.run_replay_case",
+        fake_run_replay_case,
+    )
+
+    report, report_path = await run_live_compare(
+        client=object(),
+        requested_model="requested",
+        project_root=tmp_path,
+        baseline_policy=baseline,
+        candidate_policy=candidate,
+        cases=[target, guard],
+        expectations=BehavioralExpectationSet(
+            expectations=[
+                _expectation(target, kind="target", withhold=True),
+                _expectation(guard, kind="guard"),
+            ]
+        ),
+        repeats=1,
+        max_cases=2,
+        request_budget=LLMRequestBudget(max_attempts=4),
+        max_output_tokens=64,
+        budget=LoopBudget(max_turns=2),
+    )
+
+    expected_hash = hashlib.sha256(original_profile.encode()).hexdigest()
+    assert observed_snapshots == [original_profile] * 4
+    assert report.profile_snapshots["flow_analyst"].text == original_profile
+    assert report.profile_snapshots["flow_analyst"].sha256 == expected_hash
+    persisted = json.loads(report_path.read_text(encoding="utf-8"))
+    assert persisted["profile_snapshots"]["flow_analyst"] == {
+        "profile": "flow_analyst",
+        "text": original_profile,
+        "sha256": expected_hash,
+    }
+
+
+@pytest.mark.asyncio
 async def test_comparison_fails_closed_on_hash_mismatch_missing_guard_or_model_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

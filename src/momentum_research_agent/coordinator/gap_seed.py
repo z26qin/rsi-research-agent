@@ -124,16 +124,25 @@ def append_gaps(
     *,
     session_id: str,
 ) -> list[GapLedgerRow]:
-    """Append new gaps. Duplicate `evidence_id` (any status) is skipped."""
+    """Append new failure occurrences, idempotently within one session.
+
+    A later session may fail the same evidence again.  That recurrence earns
+    its own OPEN row so a previously CLOSED research gap cannot suppress a
+    regression, while retrying persistence for one session remains a no-op.
+    """
     if not gaps:
         return []
     with _LOCK:
         rows = load_rows(project_root)
-        known = {row.evidence_id for row in rows}
+        known_occurrences = {
+            (row.evidence_id, row.source_session_id)
+            for row in rows
+        }
         added: list[GapLedgerRow] = []
         for gap in gaps:
             key = evidence_key(gap)
-            if key in known:
+            occurrence = (key, session_id)
+            if occurrence in known_occurrences:
                 continue
             row = GapLedgerRow(
                 evidence_id=key,
@@ -144,7 +153,7 @@ def append_gaps(
                 source_session_id=session_id,
             )
             rows.append(row)
-            known.add(key)
+            known_occurrences.add(occurrence)
             added.append(row)
         if added:
             write_rows(project_root, rows)

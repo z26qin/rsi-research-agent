@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from momentum_research_agent.models.schemas import (
     TaskStatus,
     VerificationReport,
 )
+from momentum_research_agent.state.policies import PolicyStore
 
 
 def _sha256(path: Path) -> str:
@@ -122,7 +124,8 @@ def _write_session(
         traces=[trace],
     )
     _write_json(session_dir / "verification.json", verification.model_dump(mode="json"))
-    _write_json(session_dir / "policy_snapshot.json", {"version_id": "0123456789ab"})
+    policy = PolicyStore(project_root).load_active()
+    _write_json(session_dir / "policy_snapshot.json", {"version_id": policy.version_id})
     return session_dir, trace.id
 
 
@@ -136,7 +139,11 @@ def test_import_session_case_is_stable_pending_and_preserves_source_schema(tmp_p
     assert len(first) == 1
     case = first[0]
     assert isinstance(case, SessionEvalCase)
-    assert case.case_id == "session:20260905_120000_deadbeef:gap00001"
+    source_fingerprint = hashlib.sha256(str(session_dir.resolve()).encode()).hexdigest()
+    assert case.case_id == (
+        f"session:20260905_120000_deadbeef:{source_fingerprint}:gap00001"
+    )
+    assert case.source_directory_sha256 == source_fingerprint
     assert case.curation_status == "pending"
     assert case.source_session_id == "20260905_120000_deadbeef"
     assert case.source_trace_ids == [trace_id]
@@ -146,7 +153,8 @@ def test_import_session_case_is_stable_pending_and_preserves_source_schema(tmp_p
     assert case.failing_evidence.evidence_id == "ev-crowd"
     assert case.tool_traces[0].arguments == {"ticker": "NVDA", "end": "2026-05-29"}
     assert '"crowding_score": 96' in case.tool_traces[0].observation
-    assert case.policy_version_id == "0123456789ab"
+    policy_version_id = PolicyStore(tmp_path).load_active().version_id
+    assert case.policy_version_id == policy_version_id
     assert case.replayable is True
     assert case.replay_blockers == []
 
@@ -160,10 +168,16 @@ def test_import_session_case_is_stable_pending_and_preserves_source_schema(tmp_p
         "task_board.json",
         "policy_snapshot.json",
         "sub_reports/task0001_flow_analyst.json",
+        f"reports/policies/versions/{policy_version_id}.json",
     }
     assert set(case.source_artifact_hashes) == expected_sources
     for relative in expected_sources:
-        assert case.source_artifact_hashes[relative] == _sha256(session_dir / relative)
+        source_path = (
+            tmp_path / relative
+            if relative.startswith("reports/policies/")
+            else session_dir / relative
+        )
+        assert case.source_artifact_hashes[relative] == _sha256(source_path)
 
     assert load_session_eval_cases(tmp_path) == first
 
@@ -235,6 +249,15 @@ def test_schema_rejects_replayable_claim_for_truncated_trace(tmp_path: Path) -> 
         SessionEvalCase.model_validate(payload)
 
 
+def test_schema_rejects_replay_trace_owned_by_another_task(tmp_path: Path) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id="schema-owner-guard")
+    payload = import_session_cases(tmp_path, session_dir)[0].model_dump(mode="json")
+    payload["tool_traces"][0]["agent_id"] = "another-task"
+
+    with pytest.raises(ValidationError, match="source task"):
+        SessionEvalCase.model_validate(payload)
+
+
 def test_import_without_verification_fails_clearly(tmp_path: Path) -> None:
     session_dir = tmp_path / "reports" / "empty-session"
     session_dir.mkdir(parents=True)
@@ -278,3 +301,176 @@ def test_inconsistent_task_tool_count_is_not_replayable(tmp_path: Path) -> None:
 
     assert case.replayable is False
     assert any("tool-call count differs" in item for item in case.replay_blockers)
+
+
+def test_verifier_trace_provenance_is_preserved_but_not_replayed(tmp_path: Path) -> None:
+    session_dir, task_trace_id = _write_session(tmp_path, session_id="verifier-mixture")
+    verifier_trace = record_trace(
+        "web_search",
+        {"query": "independent verification"},
+        "stored verifier observation",
+        agent_role="verifier",
+    )
+    assert verifier_trace is not None
+    with (session_dir / "traces.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(verifier_trace.model_dump_json() + "\n")
+    verification_path = session_dir / "verification.json"
+    payload = json.loads(verification_path.read_text(encoding="utf-8"))
+    payload["traces"].append(verifier_trace.model_dump(mode="json"))
+    payload["gaps"][0]["trace_ids"].append(verifier_trace.id)
+    _write_json(verification_path, payload)
+
+    case = import_session_cases(tmp_path, session_dir)[0]
+
+    assert case.replayable is True
+    assert case.failing_evidence.trace_ids == [task_trace_id, verifier_trace.id]
+    assert case.source_trace_ids == [task_trace_id]
+    assert [trace.id for trace in case.tool_traces] == [task_trace_id]
+
+
+def test_omitted_task_owned_trace_makes_case_non_replayable(tmp_path: Path) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id="omitted-task-trace")
+    omitted = record_trace(
+        "web_search",
+        {"query": "omitted task observation"},
+        "stored task observation",
+        agent_id="task0001",
+        agent_role="flow_analyst",
+    )
+    assert omitted is not None
+    with (session_dir / "traces.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(omitted.model_dump_json() + "\n")
+    verification_path = session_dir / "verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    verification["traces"].append(omitted.model_dump(mode="json"))
+    _write_json(verification_path, verification)
+    board_path = session_dir / "task_board.json"
+    board = json.loads(board_path.read_text(encoding="utf-8"))
+    board["tasks"][0]["tool_calls"] = 2
+    _write_json(board_path, board)
+
+    case = import_session_cases(tmp_path, session_dir)[0]
+
+    assert case.replayable is False
+    assert any("task-owned trace is not referenced" in item for item in case.replay_blockers)
+
+
+def test_foreign_research_task_trace_is_rejected_and_not_replayed(tmp_path: Path) -> None:
+    session_dir, task_trace_id = _write_session(tmp_path, session_id="foreign-task-trace")
+    foreign = record_trace(
+        "web_search",
+        {"query": "foreign task observation"},
+        "stored foreign observation",
+        agent_id="task0002",
+        agent_role="momentum_analyst",
+    )
+    assert foreign is not None
+    with (session_dir / "traces.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(foreign.model_dump_json() + "\n")
+    verification_path = session_dir / "verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    verification["traces"].append(foreign.model_dump(mode="json"))
+    verification["gaps"][0]["trace_ids"].append(foreign.id)
+    _write_json(verification_path, verification)
+
+    case = import_session_cases(tmp_path, session_dir)[0]
+
+    assert case.replayable is False
+    assert any("foreign research-task trace" in item for item in case.replay_blockers)
+    assert case.source_trace_ids == [task_trace_id]
+    assert [trace.id for trace in case.tool_traces] == [task_trace_id]
+
+
+def test_duplicate_gap_trace_reference_is_rejected(tmp_path: Path) -> None:
+    session_dir, trace_id = _write_session(tmp_path, session_id="duplicate-gap-trace")
+    verification_path = session_dir / "verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    verification["gaps"][0]["trace_ids"].append(trace_id)
+    _write_json(verification_path, verification)
+
+    case = import_session_cases(tmp_path, session_dir)[0]
+
+    assert case.replayable is False
+    assert any("duplicate trace reference" in item for item in case.replay_blockers)
+
+
+@pytest.mark.parametrize("mode", ["missing", "tampered"])
+def test_missing_or_tampered_policy_version_is_not_replayable(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id=f"policy-{mode}")
+    store = PolicyStore(tmp_path)
+    version_id = json.loads(
+        (session_dir / "policy_snapshot.json").read_text(encoding="utf-8")
+    )["version_id"]
+    version_path = store.version_path(version_id)
+    if mode == "missing":
+        version_path.unlink()
+    else:
+        payload = json.loads(version_path.read_text(encoding="utf-8"))
+        payload["prompt_overlays"] = {"flow_analyst": "tampered"}
+        _write_json(version_path, payload)
+
+    case = import_session_cases(tmp_path, session_dir)[0]
+
+    assert case.replayable is False
+    assert case.policy_version_id == version_id
+    assert any("policy version" in item for item in case.replay_blockers)
+
+
+def test_policy_validation_does_not_recreate_active_pointer(tmp_path: Path) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id="policy-read-only")
+    active_path = PolicyStore(tmp_path).active_path
+    active_path.unlink()
+
+    case = import_session_cases(tmp_path, session_dir)[0]
+
+    assert case.replayable is True
+    assert not active_path.exists()
+
+
+def test_duplicate_gap_ids_are_rejected_before_any_case_write(tmp_path: Path) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id="duplicate-gaps")
+    verification_path = session_dir / "verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    verification["gaps"].append(dict(verification["gaps"][0]))
+    _write_json(verification_path, verification)
+
+    with pytest.raises(ValueError, match="duplicate gap ids"):
+        import_session_cases(tmp_path, session_dir)
+
+    assert not (tmp_path / "reports" / "eval_cases").exists()
+
+
+def test_same_session_id_in_different_directories_does_not_overwrite(
+    tmp_path: Path,
+) -> None:
+    first_dir, _ = _write_session(tmp_path, session_id="shared-board-id")
+    second_dir = tmp_path / "import-source" / "custom-session-directory"
+    shutil.copytree(first_dir, second_dir)
+
+    first = import_session_cases(tmp_path, first_dir)
+    second = import_session_cases(tmp_path, second_dir)
+    loaded = load_session_eval_cases(tmp_path)
+
+    assert len(first) == len(second) == 1
+    assert first[0].source_session_id == second[0].source_session_id == "shared-board-id"
+    assert first[0].source_directory_sha256 != second[0].source_directory_sha256
+    assert first[0].case_id != second[0].case_id
+    assert len(loaded) == 2
+    assert {case.case_id for case in loaded} == {first[0].case_id, second[0].case_id}
+
+
+def test_import_return_order_matches_loaded_case_order(tmp_path: Path) -> None:
+    session_dir, _ = _write_session(tmp_path, session_id="return-load-parity")
+    verification_path = session_dir / "verification.json"
+    verification = json.loads(verification_path.read_text(encoding="utf-8"))
+    second_gap = dict(verification["gaps"][0])
+    second_gap["id"] = "aaa-first-when-sorted"
+    verification["gaps"].append(second_gap)
+    _write_json(verification_path, verification)
+
+    imported = import_session_cases(tmp_path, session_dir)
+
+    assert imported == load_session_eval_cases(tmp_path)

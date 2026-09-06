@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass
 from typing import Any, Optional, TypeVar
 
 from openai import AsyncOpenAI
@@ -20,7 +21,16 @@ from momentum_research_agent.models.schemas import UsageSummary
 from momentum_research_agent.tools.registry import call_tool
 
 OnToolCall = Callable[[str, dict[str, Any], str], None]
+BeforeLLMRequest = Callable[[], None]
+OnLLMResponse = Callable[[Any], None]
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class ReactLoopResult:
+    text: str
+    completed: bool
+    stop_reason: str
 
 
 def _record_usage(usage_tracker: UsageSummary | None, model: str, response: Any) -> None:
@@ -93,7 +103,7 @@ def _resolve_budget(budget: LoopBudget | None, max_turns: int | None) -> LoopBud
     return LoopBudget()
 
 
-async def react_loop(
+async def react_loop_detailed(
     client: AsyncOpenAI,
     model: str,
     system_prompt: str,
@@ -104,8 +114,12 @@ async def react_loop(
     on_tool_call: Optional[OnToolCall] = None,
     usage_tracker: UsageSummary | None = None,
     budget: LoopBudget | None = None,
-) -> str:
-    """Run a native OpenAI-compatible tool-calling loop and return the final text."""
+    before_llm_request: BeforeLLMRequest | None = None,
+    on_llm_response: OnLLMResponse | None = None,
+    max_output_tokens: int | None = None,
+    temperature: float | None = None,
+) -> ReactLoopResult:
+    """Run the native loop and expose whether a final answer really completed."""
     resolved = _resolve_budget(budget, max_turns)
     deadline = time.monotonic() + resolved.overall_deadline_s
     messages: list[dict[str, Any]] = [
@@ -122,20 +136,40 @@ async def react_loop(
         }
         if tools:
             kwargs["tools"] = tools
+        if max_output_tokens is not None:
+            kwargs["max_tokens"] = max_output_tokens
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if before_llm_request is not None:
+            before_llm_request()
         response = await _await_bounded(
             client.chat.completions.create(**kwargs),
             llm_timeout,
             AgentDeadlineExceeded(f"LLM call timed out after {llm_timeout:.1f}s."),
         )
+        if on_llm_response is not None:
+            on_llm_response(response)
         _record_usage(usage_tracker, model, response)
 
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         last_text = message.content or last_text
         tool_calls = getattr(message, "tool_calls", None) or []
         messages.append(_assistant_message(message))
 
         if not tool_calls:
-            return last_text or ""
+            finish_reason = str(getattr(choice, "finish_reason", "") or "")
+            if finish_reason == "length":
+                return ReactLoopResult(
+                    text=last_text or "",
+                    completed=False,
+                    stop_reason="length",
+                )
+            return ReactLoopResult(
+                text=last_text or "",
+                completed=True,
+                stop_reason="completed",
+            )
 
         for call in tool_calls:
             name = call.function.name
@@ -175,6 +209,37 @@ async def react_loop(
                 }
             )
 
-    return last_text or (
-        f"ReAct loop stopped after {resolved.max_turns} turns without a final answer."
+    return ReactLoopResult(
+        text=last_text
+        or f"ReAct loop stopped after {resolved.max_turns} turns without a final answer.",
+        completed=False,
+        stop_reason="max_turns_after_tool",
     )
+
+
+async def react_loop(
+    client: AsyncOpenAI,
+    model: str,
+    system_prompt: str,
+    user_message: str,
+    tools: list[dict[str, Any]],
+    tool_registry: Mapping[str, Callable[..., Any]],
+    max_turns: int | None = None,
+    on_tool_call: Optional[OnToolCall] = None,
+    usage_tracker: UsageSummary | None = None,
+    budget: LoopBudget | None = None,
+) -> str:
+    """Run a native OpenAI-compatible tool-calling loop and return final text."""
+    result = await react_loop_detailed(
+        client=client,
+        model=model,
+        system_prompt=system_prompt,
+        user_message=user_message,
+        tools=tools,
+        tool_registry=tool_registry,
+        max_turns=max_turns,
+        on_tool_call=on_tool_call,
+        usage_tracker=usage_tracker,
+        budget=budget,
+    )
+    return result.text

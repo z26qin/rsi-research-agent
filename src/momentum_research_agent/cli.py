@@ -32,6 +32,14 @@ from momentum_research_agent.eval.momentum_eval import (
     run_eval,
     run_offline_engine_eval,
 )
+from momentum_research_agent.eval.live_compare import (
+    load_cases_reference,
+    load_expectations,
+    load_policy_reference,
+    run_live_compare,
+)
+from momentum_research_agent.eval.replay_runner import LLMRequestBudget
+from momentum_research_agent.eval.session_cases import import_session_cases
 from momentum_research_agent.eval.policy_improver import (
     LLMCandidateGenerator,
     ImprovementOutcome,
@@ -45,6 +53,20 @@ from momentum_research_agent.state.reports import (
     render_verification_markdown,
 )
 from momentum_research_agent.tools.engine_pipeline import bundled_engine_root
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -102,6 +124,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the layered offline suite and attempt one constrained policy promotion.",
     )
+    commands.add_argument(
+        "--import-session",
+        type=Path,
+        help="Import one session's failures as pending replay cases (offline).",
+    )
+    commands.add_argument(
+        "--live-compare",
+        action="store_true",
+        help="Run an explicitly bounded baseline/candidate behavioral shadow comparison.",
+    )
+    parser.add_argument("--baseline-policy", help="Baseline policy version ID or JSON path.")
+    parser.add_argument("--candidate-policy", help="Candidate policy version ID or JSON path.")
+    parser.add_argument("--cases", type=Path, help="Explicit replay case file or directory.")
+    parser.add_argument("--expectations", type=Path, help="Curated expectations JSON path.")
+    parser.add_argument("--max-cases", type=_positive_int, default=5)
+    parser.add_argument("--repeats", type=_positive_int, default=2)
+    parser.add_argument("--max-llm-calls", type=_positive_int, default=40)
+    parser.add_argument("--max-output-tokens", type=_positive_int, default=1024)
+    parser.add_argument("--max-turns", type=_positive_int, default=8)
+    parser.add_argument("--overall-deadline-s", type=_positive_float, default=90.0)
+    parser.add_argument("--llm-timeout-s", type=_positive_float, default=40.0)
+    parser.add_argument("--tool-timeout-s", type=_positive_float, default=10.0)
     return parser
 
 
@@ -237,9 +281,21 @@ async def run_single(
 async def async_main(args: argparse.Namespace) -> int:
     console = Console()
     project_root = find_project_root()
-    load_env(project_root)
+
+    if getattr(args, "import_session", None) is not None:
+        session_dir = args.import_session.expanduser().resolve()
+        try:
+            imported = import_session_cases(project_root, session_dir)
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Session import failed:[/red] {exc}")
+            return 2
+        console.print(
+            f"[green]Imported {len(imported)} pending evaluation case(s).[/green]"
+        )
+        return 0
 
     if getattr(args, "run_eval", False):
+        load_env(project_root)
         results = await run_eval(project_root)
         failed = [item for item in results if not item["ok"]]
         for item in results:
@@ -254,6 +310,7 @@ async def async_main(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "improve", False):
+        load_env(project_root)
         fixture_path = (
             Path(__file__).resolve().parent
             / "eval"
@@ -282,9 +339,71 @@ async def async_main(args: argparse.Namespace) -> int:
             return 2
         return 0 if outcome.status in {"promoted", "no_change"} else 1
 
+    if getattr(args, "live_compare", False):
+        required = {
+            "--baseline-policy": args.baseline_policy,
+            "--candidate-policy": args.candidate_policy,
+            "--cases": args.cases,
+            "--expectations": args.expectations,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            console.print(
+                f"[red]--live-compare requires: {', '.join(missing)}[/red]"
+            )
+            return 2
+        try:
+            baseline = load_policy_reference(project_root, args.baseline_policy)
+            candidate = load_policy_reference(project_root, args.candidate_policy)
+            cases = load_cases_reference(project_root, args.cases)
+            expectations = load_expectations(args.expectations)
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Live comparison input failed:[/red] {exc}")
+            return 2
+        output_ceiling = args.max_llm_calls * args.max_output_tokens
+        console.print(
+            "[bold]Live comparison hard bounds:[/bold] "
+            f"max {args.max_llm_calls} LLM requests; "
+            f"max {args.max_output_tokens:,} output tokens/request; "
+            f"{output_ceiling:,} output tokens total ceiling; SDK retries disabled."
+        )
+        load_env(project_root)
+        try:
+            client = make_client()
+        except RuntimeError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 2
+        report, path = await run_live_compare(
+            client=client,
+            requested_model=args.model or sub_agent_model(),
+            project_root=project_root,
+            baseline_policy=baseline,
+            candidate_policy=candidate,
+            cases=cases,
+            expectations=expectations,
+            repeats=args.repeats,
+            max_cases=args.max_cases,
+            request_budget=LLMRequestBudget(max_attempts=args.max_llm_calls),
+            max_output_tokens=args.max_output_tokens,
+            budget=LoopBudget(
+                max_turns=args.max_turns,
+                overall_deadline_s=args.overall_deadline_s,
+                llm_timeout_s=args.llm_timeout_s,
+                tool_timeout_s=args.tool_timeout_s,
+            ),
+        )
+        console.print(f"[bold]Behavioral shadow[/bold] {report.outcome}: {path}")
+        console.print(
+            f"observed_no_regression={report.observed_no_regression}; "
+            f"target_improvements={len(report.target_improvements)}"
+        )
+        return 0 if report.outcome == "completed" else 1
+
     if not args.resume and not args.question:
         console.print("[red]A research question is required unless --resume is set.[/red]")
         return 2
+
+    load_env(project_root)
 
     session_dir = resolve_session_dir(project_root, args.session_dir, args.resume)
     session_dir.mkdir(parents=True, exist_ok=True)

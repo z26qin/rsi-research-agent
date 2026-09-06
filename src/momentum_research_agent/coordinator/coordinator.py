@@ -49,8 +49,9 @@ from momentum_research_agent.models.schemas import (
     parse_model_json,
     utcnow,
 )
-from momentum_research_agent.state.persistence import save_text
-from momentum_research_agent.state.prompt_memory import failure_brief, overlay_text, refresh_profile_hints
+from momentum_research_agent.state.persistence import load_json, save_json, save_text
+from momentum_research_agent.state.prompt_memory import failure_brief, refresh_profile_hints
+from momentum_research_agent.state.policies import PolicyStore, ResearchPolicy
 from momentum_research_agent.tools.engine_pipeline import warm_pipeline
 from momentum_research_agent.state.reports import (
     load_research_report,
@@ -62,6 +63,18 @@ from momentum_research_agent.state.reports import (
 from momentum_research_agent.tools import RESEARCH_PROFILES
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
+POLICY_SNAPSHOT_FILE = "policy_snapshot.json"
+
+
+def load_or_snapshot_policy(session_dir: Path, project_root: Path) -> ResearchPolicy:
+    """Reuse a session's immutable policy version across resume attempts."""
+    snapshot_path = Path(session_dir) / POLICY_SNAPSHOT_FILE
+    store = PolicyStore(project_root)
+    if snapshot_path.exists():
+        return store.load_version(str(load_json(snapshot_path)["version_id"]))
+    policy = store.load_active()
+    save_json(snapshot_path, {"version_id": policy.version_id})
+    return policy
 
 
 class Coordinator:
@@ -86,6 +99,7 @@ class Coordinator:
         (self.session_dir / "sub_reports").mkdir(exist_ok=True)
         self.client = client
         self.project_root = Path(project_root) if project_root else Path.cwd()
+        self.policy = load_or_snapshot_policy(self.session_dir, self.project_root)
         self.board = board or TaskBoard(self.session_dir, question=question)
         if question and not self.board.question:
             self.board.question = question
@@ -151,9 +165,6 @@ class Coordinator:
 
     async def decompose(self, question: str) -> list[Task]:
         system_prompt = (PROMPTS_DIR / "decompose.md").read_text(encoding="utf-8")
-        overlay = overlay_text(self.project_root)
-        if overlay:
-            system_prompt = f"{system_prompt}\n\n{overlay}"
         user_message = f"Research question:\n\n{question}"
         brief = failure_brief(self.project_root)
         if brief:
@@ -204,6 +215,7 @@ class Coordinator:
                     verbose=self.verbose,
                     on_progress=self._on_progress,
                     console=self.console,
+                    policy=self.policy,
                 )
                 return await agent.run(task, None, self.session_dir)
 
@@ -306,7 +318,7 @@ class Coordinator:
     def seed_from_ledger(self) -> list[Task]:
         """After decompose, plant at most 2 kind=gap tasks from OPEN ledger rows."""
         self.record_gaps()
-        planted = seed_open_gaps(self.board, self.project_root)
+        planted = seed_open_gaps(self.board, self.project_root, self.policy)
         if planted:
             self.console.print(
                 f"[bold]Gap seed[/bold] — planted {len(planted)} kind=gap task(s)"

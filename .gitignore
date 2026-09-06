@@ -9,6 +9,7 @@ build/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.worktrees/
 .coverage
 htmlcov/
 .DS_Store

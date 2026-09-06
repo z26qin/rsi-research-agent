@@ -1,0 +1,341 @@
+# Task 2 report: bounded replay and behavioral shadow comparison
+
+## Outcome
+
+Implemented accepted slices 2–3 with the existing ReAct loop. The runner uses only
+validated stored `engine_query` / `web_search` observations and never falls back to a
+live tool. The comparison is a paired behavioral assertion check over separately
+curated, case-hash-bound expectations; it is not generic semantic truth scoring and
+does not promote policy or write the active pointer/gap ledger.
+
+No credential file was read or changed and no paid request was made by the implementer.
+The controller separately ran the explicitly bounded synthetic wiring smoke described
+below.
+
+## Implementation
+
+- Added `eval/replay_runner.py`:
+  - canonical `(tool name, JSON arguments)` stored-observation matching;
+  - trace hash/truncation/tool/profile checks and conflicting-observation rejection;
+  - closed-over replay functions whose tool identity cannot be changed by model args;
+  - every actual call recorded, including unknown/unmatched/non-finite calls;
+  - no live-tool fallback, and unmatched calls make the run unscorable;
+  - real profile/report instructions/ReAct loop/`LoopBudget`/`UsageSummary` reuse;
+  - capability-scoped prompt overlays, task templates, and authorized tool guidance;
+  - no legacy mutable overlay or `PolicyStore.load_active()` use;
+  - a shared hard attempted-request budget checked immediately before each request;
+  - `with_options(max_retries=0)`, explicit output tokens and temperature;
+  - requested and actual response model IDs, raw/report output, calls, usage, latency,
+    completion state, outcome, and sanitized reasons;
+  - max-turn-after-tool, stale intermediate text, length truncation, malformed reports,
+    budget exhaustion, and unknown observations cannot count as success;
+  - `CancelledError` continues to propagate.
+- Added `react_loop_detailed()` while preserving the existing `react_loop()` string API.
+  The detailed result distinguishes a real final answer from length/max-turn exits and
+  accepts bounded request/response hooks.
+- Added `eval/live_compare.py`:
+  - `BehavioralExpectationSet` with reviewer/provenance/rationale metadata;
+  - exact `SessionEvalCase` content-hash binding;
+  - explicit target/guard distinction;
+  - non-vacuous exact required calls, optional engine as-of binding, observation-backed
+    evidence requirements, and typed claim-withholding/status assertions;
+  - evidence URL/excerpt validation against observations actually consumed;
+  - exact paired case/repeat execution and per-pair resolved-model fairness;
+  - violations and unscorable runs retained rather than converted to passes;
+  - target improvements separate from observed guard non-regression;
+  - self-contained `reports/live_evals/<unique-id>/comparison.json` with policies,
+    cases, selected expectations/hash, budgets, outputs, usage, latency, and outcomes;
+  - runtime failures are recorded into the persisted comparison without raw transport
+    details.
+- Added CLI surfaces:
+  - `--import-session PATH` remains offline;
+  - `--live-compare` requires explicit baseline/candidate/cases/expectations;
+  - positive max-cases/repeats/request/output/turn/timeout bounds;
+  - enforced request and output-token ceilings printed before client creation;
+  - missing key exits before a request.
+- Updated `AGENTS.md` and `README.md` for occurrence-aware gap import, evaluation
+  artifacts, expectation semantics, operator commands, and the synthetic smoke result.
+
+## Stable interfaces
+
+```python
+from momentum_research_agent.eval.replay_runner import (
+    LLMRequestBudget,
+    ReplayRunResult,
+    case_content_sha256,
+    run_replay_case,
+)
+from momentum_research_agent.eval.live_compare import (
+    BehavioralExpectation,
+    BehavioralExpectationSet,
+    ExpectedEvidence,
+    ExpectedToolCall,
+    LiveComparisonReport,
+    run_live_compare,
+)
+```
+
+`run_replay_case(...) -> ReplayRunResult` accepts an explicit client, requested model,
+project root, `SessionEvalCase`, supplied validated `ResearchPolicy`, `LoopBudget`, shared
+`LLMRequestBudget`, and max output tokens.
+
+`run_live_compare(...) -> tuple[LiveComparisonReport, Path]` accepts the same controls
+plus explicit baseline/candidate policies, cases, expectations, repeats, and max cases.
+
+The expectations file is a `behavioral_expectations_v1` object containing an
+`expectations` list. Each entry requires `case_id`, `case_sha256`, `kind`, `reviewer`,
+`provenance`, `rationale`, at least one exact `required_calls` item,
+`allowed_report_statuses`, and either `required_evidence` or
+`require_no_findings=true`.
+
+## TDD evidence
+
+Initial RED before implementation:
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest \
+  tests/test_react_loop.py tests/test_replay_runner.py -q
+
+ImportError: cannot import name 'react_loop_detailed'
+ModuleNotFoundError: No module named 'momentum_research_agent.eval.replay_runner'
+2 errors in 0.47s
+```
+
+Initial runner GREEN:
+
+```text
+14 passed in 0.45s
+```
+
+Further focused RED/GREEN cycles proved:
+
+- model `_tool_name` arguments could override a closure default and incorrectly match a
+  trace: `1 failed, 1 passed`; a factory with a closed-over identity fixed it;
+- an omitted/unknown replay tool request initially produced a false successful run:
+  `1 failed`; recording it as `REPLAY_UNAVAILABLE` made all 7 runner tests pass;
+- an empty case directory initially loaded as a valid empty selection: `1 failed`;
+  explicit rejection fixed it;
+- aggregate model sets initially masked opposite per-pair model drift: `1 failed`;
+  per-case/repeat fairness fixed it;
+- a report initially hashed the caller's full expectation set rather than its persisted
+  selected subset: `1 failed`; the self-contained hash now matches stored expectations;
+- zero request budget was initially accepted: `1 failed`; all public numeric bounds are
+  now positive, while an already-exhausted positive budget exercises failure behavior.
+
+Final focused verification and per-module coverage:
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest \
+  tests/test_react_loop.py tests/test_replay_runner.py tests/test_live_compare.py \
+  tests/test_live_compare_cli.py \
+  --cov=momentum_research_agent.eval.replay_runner \
+  --cov=momentum_research_agent.eval.live_compare \
+  --cov-report=term-missing -q
+
+25 passed in 1.06s
+live_compare.py: 280 statements, 51 missed, 82% coverage
+replay_runner.py: 176 statements, 16 missed, 91% coverage
+total: 85% coverage
+```
+
+Fresh compile and full-suite verification:
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m compileall -q \
+  src/momentum_research_agent
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest -q
+190 passed in 1.14s
+
+git diff --check
+# exit 0
+```
+
+## Controller-owned synthetic live wiring smoke
+
+The controller ran one explicitly synthetic target plus one synthetic guard, two
+policies, one repeat, max three turns, max 12 attempted LLM requests, and max 1,024
+output tokens/request. It did not use or claim a historical corpus.
+
+Result artifact (ignored controller workspace):
+
+```text
+reports/synthetic_live_smoke/reports/live_evals/
+20260905_223059_8ef8d45f/comparison.json
+```
+
+- all four policy/case runs succeeded;
+- each run made two LLM requests, eight total under the 12-call cap;
+- every response resolved to `deepseek-v4-flash`;
+- usage was 9,317 prompt + 1,653 completion = 10,970 tokens;
+- both policies passed both toy cases;
+- `observed_no_regression=true`, `target_improvements=[]`;
+- the active policy pointer remained unchanged.
+
+This validates bounded live wiring and the guard path only. It is not evidence of a
+candidate improvement, historical performance, statistical significance, or generic
+research quality.
+
+## Remaining concerns
+
+- No historical session corpus existed in the scoped roots. Real failure-case curation
+  and comparison remain operator work; the code does not fabricate that dataset.
+- This slice intentionally stops at shadow evaluation. Promotion and execution-time
+  replanning remain outside scope.
+- Evidence assertions are deliberately narrow and literal (call arguments plus consumed
+  URL/excerpt provenance or withholding). Broader semantic judging would require a
+  separately reviewed design and must not be inferred from these results.
+
+## Review round 1
+
+Resolved all confirmed completion, numeric-bound, model-fairness, and CLI error-boundary
+findings without another paid request.
+
+### Strict ReAct completion
+
+- Detailed completion now uses only the current response content. A prior tool turn's
+  text cannot become the final report when the terminal response is empty.
+- A terminal result succeeds only for explicit `finish_reason="stop"` with non-empty
+  content. `content_filter`, missing reason, and other non-stop terminal reasons are
+  incomplete.
+- `finish_reason="length"` is rejected before any included tool call can execute. It
+  cannot consume an observation, continue to a later response, or pass.
+- Max-turn-after-tool remains incomplete. The legacy `react_loop()` wrapper still
+  returns the detailed result text for existing callers.
+
+Review RED reproduced all three false-success paths:
+
+```text
+valid tool-turn JSON + matched call + empty stop: expected incomplete, got completed
+content_filter final: expected incomplete, got completed
+length + tool call + later valid final: expected incomplete, got completed
+```
+
+The three detailed-loop cases plus the end-to-end replay regression now pass (`4 passed
+in 0.35s`).
+
+### Numeric bounds
+
+- `LoopBudget` now requires a positive integral, non-boolean `max_turns` and finite,
+  positive, non-boolean deadlines/timeouts.
+- `LLMRequestBudget` requires positive integral, non-boolean request limits and valid
+  integral attempted counts.
+- Direct replay/comparison output, repeat, and case bounds require positive integers;
+  bools, fractions, NaN, and infinities fail before a request.
+- CLI floating bounds reject NaN and infinities. The CLI also now imports `LoopBudget`,
+  closing an offline-test-discovered `NameError` on the live command path.
+
+Review RED produced 16 deterministic validation failures across constructors, direct
+comparison, and CLI parsing. Focused GREEN: `16 passed in 0.43s`.
+
+### Resolved-model fairness and CLI failures
+
+- Every individual run must have exactly one non-empty, non-`unknown` resolved model
+  identity. Baseline and candidate identities must match for the same case/repeat pair.
+  Reversed `[model-a, model-b]` / `[model-b, model-a]` sequences now fail instead of
+  passing through set equality.
+- Expected comparison validation failures (same policy, missing expectation binding,
+  missing target/guard, invalid direct bounds) now produce a concise sanitized CLI
+  message and exit code 2 rather than a traceback or raw exception content.
+
+Both isolated regressions pass.
+
+### Review verification
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest \
+  tests/test_react_loop.py tests/test_replay_runner.py tests/test_live_compare.py \
+  tests/test_live_compare_cli.py \
+  --cov=momentum_research_agent.eval.replay_runner \
+  --cov=momentum_research_agent.eval.live_compare \
+  --cov-report=term-missing -q
+
+45 passed in 1.12s
+live_compare.py: 282 statements, 50 missed, 82% coverage
+replay_runner.py: 180 statements, 17 missed, 91% coverage
+total: 85% coverage
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m compileall -q \
+  src/momentum_research_agent
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest -q
+210 passed in 1.23s
+
+git diff --check
+# exit 0
+```
+
+## Final whole-branch review fixes
+
+Resolved the two scoped P3 findings without model or tool-network calls.
+
+### Exact imported-case identity
+
+`SessionEvalCase` now compares `case_id` against the complete expected value:
+
+```text
+session:{source_session_id}:{source_directory_sha256}:{failing_evidence.id}
+```
+
+This rejects a substituted session prefix and permits valid gap IDs containing colons.
+The prior `rsplit(":", 2)` checked only the final hash/gap-shaped suffix, so the wrong
+session prefix passed and colon-bearing gap IDs failed.
+
+RED before the validator change:
+
+```text
+test_schema_binds_entire_case_identity_and_allows_colons_in_gap_id
+Failed: DID NOT RAISE ValidationError for a mismatched source session
+```
+
+### Frozen base-profile snapshots
+
+`run_live_compare()` now loads each selected profile exactly once before dispatch and
+passes that immutable text to every baseline/candidate replay for that profile.
+`run_replay_case()` accepts the simple optional `base_profile_text`; direct callers that
+omit it retain the existing single-run load behavior. Policy overlays remain compiled
+per baseline/candidate variant on top of the same frozen base.
+
+The comparison JSON now persists `profile_snapshots`, keyed by profile, with:
+
+- exact base profile text;
+- profile name;
+- SHA-256 of the UTF-8 text.
+
+RED before snapshot injection:
+
+```text
+test_comparison_snapshots_base_profile_once_for_all_paired_prompts
+expected four identical frozen snapshots, observed none
+```
+
+The regression mutates the on-disk profile after the first paired run. All four replay
+calls still receive the original text, the direct runner uses it as the system-prompt
+base, and the persisted text/hash match that original snapshot.
+
+### Final focused and full verification
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest \
+  tests/test_session_cases.py tests/test_react_loop.py tests/test_replay_runner.py \
+  tests/test_live_compare.py tests/test_live_compare_cli.py \
+  --cov=momentum_research_agent.eval.session_cases \
+  --cov=momentum_research_agent.eval.replay_runner \
+  --cov=momentum_research_agent.eval.live_compare \
+  --cov-report=term-missing -q
+
+66 passed in 1.34s
+session_cases.py: 272 statements, 36 missed, 87% coverage
+replay_runner.py: 182 statements, 17 missed, 91% coverage
+live_compare.py: 297 statements, 51 missed, 83% coverage
+total: 86% coverage
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m compileall -q \
+  src/momentum_research_agent
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest -q
+212 passed in 1.20s
+
+git diff --check
+# exit 0
+```

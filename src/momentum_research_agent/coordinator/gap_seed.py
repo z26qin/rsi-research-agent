@@ -27,6 +27,7 @@ from momentum_research_agent.models.schemas import (
     VerificationStatus,
 )
 from momentum_research_agent.state.reports import load_verification_report
+from momentum_research_agent.state.policies import PolicyStore, ResearchPolicy, task_template_addition
 
 MAX_GAP_SEED_TASKS = 2
 
@@ -34,12 +35,14 @@ CAPABILITY_PROFILE: dict[MomentumCapability, str] = {
     MomentumCapability.CROWDING: "flow_analyst",
     MomentumCapability.UNWIND_CRASH: "momentum_analyst",
     MomentumCapability.ENGINE_FRESHNESS: "momentum_analyst",
+    MomentumCapability.SOURCE_QUALITY: "technicals_analyst",
 }
 
 _PLANT_ORDER = (
     MomentumCapability.CROWDING,
     MomentumCapability.UNWIND_CRASH,
     MomentumCapability.ENGINE_FRESHNESS,
+    MomentumCapability.SOURCE_QUALITY,
 )
 
 _CROWDING_HITS = (
@@ -121,16 +124,25 @@ def append_gaps(
     *,
     session_id: str,
 ) -> list[GapLedgerRow]:
-    """Append new gaps. Duplicate `evidence_id` (any status) is skipped."""
+    """Append new failure occurrences, idempotently within one session.
+
+    A later session may fail the same evidence again.  That recurrence earns
+    its own OPEN row so a previously CLOSED research gap cannot suppress a
+    regression, while retrying persistence for one session remains a no-op.
+    """
     if not gaps:
         return []
     with _LOCK:
         rows = load_rows(project_root)
-        known = {row.evidence_id for row in rows}
+        known_occurrences = {
+            (row.evidence_id, row.source_session_id)
+            for row in rows
+        }
         added: list[GapLedgerRow] = []
         for gap in gaps:
             key = evidence_key(gap)
-            if key in known:
+            occurrence = (key, session_id)
+            if occurrence in known_occurrences:
                 continue
             row = GapLedgerRow(
                 evidence_id=key,
@@ -141,7 +153,7 @@ def append_gaps(
                 source_session_id=session_id,
             )
             rows.append(row)
-            known.add(key)
+            known_occurrences.add(occurrence)
             added.append(row)
         if added:
             write_rows(project_root, rows)
@@ -171,7 +183,7 @@ def select_open_rows(rows: list[GapLedgerRow]) -> list[GapLedgerRow]:
     return chosen
 
 
-def gap_task_fields(row: GapLedgerRow) -> tuple[str, str, str]:
+def gap_task_fields(row: GapLedgerRow, policy: ResearchPolicy) -> tuple[str, str, str]:
     profile = CAPABILITY_PROFILE[row.capability]
     title = f"Gap: {row.capability.value}"
     assignment = (
@@ -182,6 +194,9 @@ def gap_task_fields(row: GapLedgerRow) -> tuple[str, str, str]:
         "This is a planted gap-ledger task, not an in-session follow-up. "
         "Use allowlisted tools and return Evidence[]."
     )
+    addition = task_template_addition(policy, row.capability)
+    if addition:
+        assignment = f"{assignment}\n\nPolicy guidance: {addition}"
     return title, assignment, profile
 
 
@@ -198,18 +213,23 @@ def record_session_gaps(
     return append_gaps(project_root, gaps, session_id=session_id)
 
 
-def seed_open_gaps(board: TaskBoard, project_root: Path) -> list[Task]:
+def seed_open_gaps(
+    board: TaskBoard,
+    project_root: Path,
+    policy: ResearchPolicy | None = None,
+) -> list[Task]:
     """Plant at most 2 kind=gap tasks from OPEN rows; mark those rows CONSUMED."""
     if already_gap_seeded(board.tasks):
         return []
     with _LOCK:
+        selected_policy = policy or PolicyStore(project_root).load_active()
         rows = load_rows(project_root)
         chosen = select_open_rows(rows)
         if not chosen:
             return []
         planted: list[Task] = []
         for row in chosen:
-            title, assignment, profile = gap_task_fields(row)
+            title, assignment, profile = gap_task_fields(row, selected_policy)
             task = board.add_task(title, assignment, profile, kind=TaskKind.GAP)
             row.status = GapLedgerStatus.CONSUMED
             row.consumed_session_id = board.session_id

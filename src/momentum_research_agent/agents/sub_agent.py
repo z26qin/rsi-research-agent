@@ -25,6 +25,7 @@ from momentum_research_agent.models.schemas import (
 from momentum_research_agent.state.reports import persist_research_report
 from momentum_research_agent.state.traces import append_traces
 from momentum_research_agent.state.prompt_memory import overlay_text
+from momentum_research_agent.state.policies import PolicyStore, ResearchPolicy
 from momentum_research_agent.tools import authorize_research_tools
 from momentum_research_agent.tools.registry import (
     ToolContext,
@@ -40,6 +41,7 @@ def load_profile(
     project_root: Path,
     *,
     apply_overlay: bool = True,
+    policy: ResearchPolicy | None = None,
 ) -> str:
     """Load a frozen profile. Overlay is for research profiles only.
 
@@ -54,9 +56,9 @@ def load_profile(
     for path in candidates:
         if path.exists():
             text = path.read_text(encoding="utf-8")
-            if not apply_overlay:
+            if name == "verifier" or not apply_overlay:
                 return text
-            overlay = overlay_text(project_root)
+            overlay = overlay_text(project_root, name, policy=policy)
             if overlay:
                 return f"{text.rstrip()}\n\n{overlay}\n"
             return text
@@ -142,6 +144,7 @@ class SubAgent:
         verbose: bool = False,
         on_progress: Optional[OnProgress] = None,
         console=None,
+        policy: ResearchPolicy | None = None,
     ) -> None:
         self.client = client
         self.model = model
@@ -150,6 +153,7 @@ class SubAgent:
         self.verbose = verbose
         self.on_progress = on_progress
         self.console = console
+        self.policy = policy or PolicyStore(self.project_root).load_active()
 
     async def run(
         self,
@@ -192,7 +196,7 @@ class SubAgent:
                 self.console.print(f"[dim]{task.profile} · {name}({arguments}) → {preview}[/dim]")
 
         try:
-            system_prompt = load_profile(task.profile, self.project_root)
+            system_prompt = load_profile(task.profile, self.project_root, policy=self.policy)
             text = await react_loop(
                 client=self.client,
                 model=self.model,

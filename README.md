@@ -44,10 +44,29 @@ uv run momentum-research-agent "Is the recent NVDA selloff a momentum crash sign
 
 uv run momentum-research-agent --mode single "Analyze NVDA credit risk"
 
-uv run momentum-research-agent --eval
+uv run momentum-research-agent --eval       # deterministic; no DeepSeek
+uv run momentum-research-agent --improve    # at most one candidate
+uv run momentum-research-agent --import-session reports/<session-id>  # offline
+
+uv run momentum-research-agent --live-compare \
+  --baseline-policy <version-id-or-policy.json> \
+  --candidate-policy <version-id-or-policy.json> \
+  --cases curated-cases.json \
+  --expectations behavioral-expectations.json \
+  --max-cases 2 --repeats 2 \
+  --max-llm-calls 24 --max-output-tokens 1024 \
+  --max-turns 3 --llm-timeout-s 40 --overall-deadline-s 90
 ```
 
-Flags: `--mode team|single`, `--session-dir`, `--resume`, `--max-sub-agents`, `--model`, `--coordinator-model`, `--verbose`, `--eval`.
+`--eval` keeps the existing deterministic engine check and gap-ledger writeback. `--improve` runs a separate, pinned offline engine guard from the bundled fixture, evaluates recorded policy-contract checkpoints, and requests at most one schema-bound candidate only when the baseline has policy failures. `--import-session` reads existing structured session artifacts and creates pending cases without a model request or invented expected answer.
+
+`--live-compare` is an explicit live-LLM shadow run over fixed, validated stored tool observations. Baseline and candidate receive the same cases, model request, temperature, budgets, and observations; only their immutable research policy differs. It defaults to two repeats. The CLI prints the enforced request and output-token ceilings before client creation, disables SDK retries, and records requested plus actual response model IDs. Missing cases, timeouts, unsupported calls, malformed/truncated reports, or different resolved models fail closed. It writes a self-contained `reports/live_evals/<run-id>/comparison.json` and does not change the active policy or gap ledger.
+
+Expectations are reviewer-authored in a separate `behavioral_expectations_v1` JSON object. Each entry binds `case_id` and canonical `case_sha256`, labels the case `target` or `guard`, records reviewer/provenance/rationale, declares at least one exact tool call, and requires either observation-backed evidence or explicit claim withholding. This is bounded behavioral assertion coverage, not a general semantic truth or research-quality score. A cases JSON file may contain full `SessionEvalCase` objects or explicit case IDs already present under `reports/eval_cases/`.
+
+The 2026-09-05 controller-owned synthetic wiring smoke used one target, one guard, one repeat, three turns, a 12-request cap, and 1,024 output tokens/request. All four policy/case runs completed in eight requests and resolved to `deepseek-v4-flash`; the active pointer was unchanged. Both policies passed both toy cases, so the result demonstrated bounded replay/comparison wiring and observed guard non-regression, not historical performance or candidate improvement.
+
+Flags: `--mode team|single`, `--session-dir`, `--resume`, `--max-sub-agents`, `--model`, `--coordinator-model`, `--verbose`, `--eval`, `--improve`, `--import-session`, `--live-compare`, plus the explicit live comparison input and bound flags shown above.
 
 On startup the CLI prints a Rich banner, a decomposition table, live task-board updates during dispatch, a synthesis panel, a token/cost summary, and the session path.
 
@@ -57,9 +76,15 @@ Each run writes `reports/{YYYYMMDD}_{HHmmss}_{8-char-hex}/`, plus a cross-sessio
 
 | File | Purpose |
 | --- | --- |
-| `reports/gap_ledger.jsonl` | Cross-session OPEN/CONSUMED/CLOSED gaps (deduped by `evidence_id`) |
+| `reports/gap_ledger.jsonl` | Cross-session OPEN/CONSUMED/CLOSED gap occurrences (deduped per evidence and source session) |
+| `reports/eval_cases/*.json` | Pending imported session-failure occurrences; expectations remain separate |
+| `reports/live_evals/{run-id}/comparison.json` | Paired behavioral shadow runs, policy/case/expectation snapshots, calls, reports, usage, latency, and outcome |
 | `reports/prompt_evolution.json` | Runtime overlay rules from OPEN gaps (not weight training) |
 | `reports/profile_hints.md` | Appended to frozen profiles at load time |
+| `reports/policies/active.json` | Atomic pointer to the active immutable research-policy version |
+| `reports/policies/versions/{version_id}.json` | Content-addressed baseline and promoted policy versions |
+| `reports/policies/experiments/{experiment_id}.json` | Baseline, candidate, fixture fingerprints, and promotion decision for each attempted cycle |
+| `policy_snapshot.json` | Per-session version pin; resumes reuse the policy loaded at session start |
 | `task_board.json` | Full task history with timestamps |
 | `sub_reports/{task_id}_{profile}.json` | Canonical `ResearchReport` (Evidence[]) |
 | `sub_reports/{task_id}_{profile}.md` | Human-readable rendering of the same report |
@@ -68,6 +93,16 @@ Each run writes `reports/{YYYYMMDD}_{HHmmss}_{8-char-hex}/`, plus a cross-sessio
 | `synthesis.md` / `synthesis.json` | Final PM brief |
 
 `--resume` reloads JSON reports first. Markdown-only leftovers from older sessions become a low-confidence compatibility report.
+
+Policy is non-authoritative guidance. It may affect only research prompt overlays, gap-task additions, and selection among tools already authorized for a research profile. It cannot add tools or profiles, change deterministic signals, or guide the verifier. Committed profile Markdown stays frozen, and the verifier never loads policy overlays. A research session snapshots the active version once at startup; an improvement completed during that session does not change the running or resumed session.
+
+To roll back, choose a known prior ID from `reports/policies/versions/` and use the validating store helper, which refuses missing or corrupt versions:
+
+```bash
+PYTHONPATH=src python -c 'from pathlib import Path; from momentum_research_agent.state.policies import PolicyStore; PolicyStore(Path.cwd()).activate("<prior-version-id>")'
+```
+
+`--improve` uses `reports/policies/improvement.lock` to prevent overlapping cycles. If an interrupted process leaves it behind, first confirm that no improvement process is running; only then remove that single stale lock file and retry.
 
 ## Runtime bounds
 

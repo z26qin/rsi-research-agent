@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from momentum_research_agent.agents.budget import LoopBudget
-from momentum_research_agent.agents.react_loop import react_loop
+from momentum_research_agent.agents.react_loop import react_loop, react_loop_detailed
 from momentum_research_agent.errors import AgentDeadlineExceeded, ToolExecutionTimeout
 from momentum_research_agent.models.schemas import UsageSummary
 
@@ -36,9 +36,16 @@ class FakeUsage:
 
 
 class FakeResponse:
-    def __init__(self, message: FakeMessage) -> None:
-        self.choices = [SimpleNamespace(message=message)]
+    def __init__(
+        self,
+        message: FakeMessage,
+        *,
+        finish_reason: str = "stop",
+        model: str = "resolved-model",
+    ) -> None:
+        self.choices = [SimpleNamespace(message=message, finish_reason=finish_reason)]
         self.usage = FakeUsage()
+        self.model = model
 
 
 class FakeCompletions:
@@ -224,7 +231,12 @@ async def test_overall_deadline_stops_long_run() -> None:
             user_message="go",
             tools=[],
             tool_registry={},
-            budget=LoopBudget(max_turns=3, overall_deadline_s=0, llm_timeout_s=20, tool_timeout_s=10),
+            budget=LoopBudget(
+                max_turns=3,
+                overall_deadline_s=1e-9,
+                llm_timeout_s=20,
+                tool_timeout_s=10,
+            ),
         )
 
 
@@ -277,3 +289,171 @@ async def test_cancellation_propagates() -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_detailed_loop_enforces_request_hook_and_output_limit() -> None:
+    attempts: list[str] = []
+    responses: list[object] = []
+    client = FakeClient([FakeResponse(FakeMessage(content="complete"))])
+
+    result = await react_loop_detailed(
+        client=client,  # type: ignore[arg-type]
+        model="requested-model",
+        system_prompt="sys",
+        user_message="go",
+        tools=[],
+        tool_registry={},
+        before_llm_request=lambda: attempts.append("attempt"),
+        on_llm_response=responses.append,
+        max_output_tokens=321,
+        temperature=0.0,
+    )
+
+    assert attempts == ["attempt"]
+    assert responses[0].model == "resolved-model"
+    assert client.completions.calls[0]["max_tokens"] == 321
+    assert client.completions.calls[0]["temperature"] == 0.0
+    assert result.completed is True
+    assert result.stop_reason == "completed"
+    assert result.text == "complete"
+
+
+@pytest.mark.asyncio
+async def test_detailed_loop_does_not_treat_length_or_final_tool_call_as_complete() -> None:
+    length_client = FakeClient(
+        [FakeResponse(FakeMessage(content='{"partial":'), finish_reason="length")]
+    )
+    length = await react_loop_detailed(
+        client=length_client,  # type: ignore[arg-type]
+        model="model",
+        system_prompt="sys",
+        user_message="go",
+        tools=[],
+        tool_registry={},
+    )
+    assert length.completed is False
+    assert length.stop_reason == "length"
+
+    tool_client = FakeClient(
+        [
+            FakeResponse(
+                FakeMessage(
+                    content="stale intermediate",
+                    tool_calls=[FakeToolCall("c1", "ping", "{}")],
+                ),
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+    final_tool = await react_loop_detailed(
+        client=tool_client,  # type: ignore[arg-type]
+        model="model",
+        system_prompt="sys",
+        user_message="go",
+        tools=[],
+        tool_registry={"ping": lambda: "pong"},
+        max_turns=1,
+    )
+    assert final_tool.completed is False
+    assert final_tool.stop_reason == "max_turns_after_tool"
+
+
+@pytest.mark.asyncio
+async def test_detailed_loop_does_not_reuse_tool_turn_text_for_empty_final() -> None:
+    client = FakeClient(
+        [
+            FakeResponse(
+                FakeMessage(
+                    content='{"looks":"final but requested a tool"}',
+                    tool_calls=[FakeToolCall("c1", "ping", "{}")],
+                ),
+                finish_reason="tool_calls",
+            ),
+            FakeResponse(FakeMessage(content=""), finish_reason="stop"),
+        ]
+    )
+
+    result = await react_loop_detailed(
+        client=client,  # type: ignore[arg-type]
+        model="model",
+        system_prompt="sys",
+        user_message="go",
+        tools=[],
+        tool_registry={"ping": lambda: "pong"},
+    )
+
+    assert result.completed is False
+    assert result.stop_reason == "empty_final"
+    assert result.text == ""
+
+
+@pytest.mark.asyncio
+async def test_detailed_loop_rejects_content_filter_terminal_reason() -> None:
+    client = FakeClient(
+        [
+            FakeResponse(
+                FakeMessage(content='{"partial":"filtered"}'),
+                finish_reason="content_filter",
+            )
+        ]
+    )
+
+    result = await react_loop_detailed(
+        client=client,  # type: ignore[arg-type]
+        model="model",
+        system_prompt="sys",
+        user_message="go",
+        tools=[],
+        tool_registry={},
+    )
+
+    assert result.completed is False
+    assert result.stop_reason == "content_filter"
+
+
+@pytest.mark.asyncio
+async def test_length_response_with_tool_calls_does_not_execute_tools_or_continue() -> None:
+    executed: list[str] = []
+    client = FakeClient(
+        [
+            FakeResponse(
+                FakeMessage(
+                    content="truncated",
+                    tool_calls=[FakeToolCall("c1", "ping", "{}")],
+                ),
+                finish_reason="length",
+            ),
+            FakeResponse(FakeMessage(content="later valid final"), finish_reason="stop"),
+        ]
+    )
+
+    result = await react_loop_detailed(
+        client=client,  # type: ignore[arg-type]
+        model="model",
+        system_prompt="sys",
+        user_message="go",
+        tools=[],
+        tool_registry={"ping": lambda: executed.append("ran") or "pong"},
+    )
+
+    assert result.completed is False
+    assert result.stop_reason == "length"
+    assert executed == []
+    assert len(client.completions.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"max_turns": 0},
+        {"max_turns": True},
+        {"max_turns": 1.5},
+        {"overall_deadline_s": float("nan")},
+        {"llm_timeout_s": float("inf")},
+        {"tool_timeout_s": -1},
+    ],
+)
+def test_loop_budget_rejects_invalid_direct_api_bounds(kwargs: dict) -> None:
+    with pytest.raises(ValueError):
+        LoopBudget(**kwargs)

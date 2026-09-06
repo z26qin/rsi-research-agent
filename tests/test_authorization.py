@@ -12,6 +12,8 @@ from momentum_research_agent.tools import (
     registered_names,
     tools_for_profile,
 )
+from momentum_research_agent.models.schemas import MomentumCapability
+from momentum_research_agent.state.policies import PolicyPatch, ToolPolicy, validate_policy
 
 
 def test_known_profile_resolves_only_allowlist() -> None:
@@ -47,3 +49,19 @@ def test_verifier_is_authorized_but_not_a_research_profile() -> None:
     assert "shell" not in authorize_tools("verifier")
     with pytest.raises(UnauthorizedTool, match="not a research profile"):
         authorize_research_tools("verifier")
+
+
+def test_policy_cannot_expand_profile_tool_authorization() -> None:
+    with pytest.raises(ValueError, match="unknown tool"):
+        validate_policy(
+            PolicyPatch(
+                tool_policies=[
+                    ToolPolicy(
+                        profile="momentum_analyst",
+                        capability=MomentumCapability.ENGINE_FRESHNESS,
+                        required_tools=["shell"],
+                    )
+                ]
+            ),
+            profile_tools=PROFILE_TOOLS,
+        )

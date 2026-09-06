@@ -25,11 +25,54 @@ from momentum_research_agent.state.reports import (
     persist_research_report,
     persist_verification_report,
 )
+from momentum_research_agent.state.policies import PolicyPatch, PolicyStore, merge_policy_patch
 
 
 class FakeUsage:
     prompt_tokens = 100
     completion_tokens = 50
+
+
+def _coordinator(tmp_path: Path) -> Coordinator:
+    return Coordinator(
+        session_dir=tmp_path / "session",
+        client=FakeClient([]),  # type: ignore[arg-type]
+        question="Is the NVDA selloff a crash?",
+        project_root=tmp_path,
+    )
+
+
+def test_coordinator_pins_active_policy_at_construction(tmp_path: Path) -> None:
+    store = PolicyStore(tmp_path)
+    baseline = store.load_active()
+    coordinator = _coordinator(tmp_path)
+    candidate = merge_policy_patch(
+        baseline,
+        PolicyPatch(prompt_overlays={"momentum_analyst": "new rule"}),
+        trigger_ids=["trajectory:new-rule"],
+    )
+    store.write_version(candidate)
+    store.activate(candidate.version_id)
+
+    assert coordinator.policy.version_id == baseline.version_id
+    assert PolicyStore(tmp_path).load_active().version_id == candidate.version_id
+
+
+def test_coordinator_resume_uses_session_policy_snapshot(tmp_path: Path) -> None:
+    store = PolicyStore(tmp_path)
+    coordinator = _coordinator(tmp_path)
+    baseline_id = coordinator.policy.version_id
+    candidate = merge_policy_patch(
+        coordinator.policy,
+        PolicyPatch(prompt_overlays={"momentum_analyst": "new rule"}),
+        trigger_ids=["trajectory:new-rule"],
+    )
+    store.write_version(candidate)
+    store.activate(candidate.version_id)
+
+    resumed = _coordinator(tmp_path)
+
+    assert resumed.policy.version_id == baseline_id
 
 
 class FakeResponse:

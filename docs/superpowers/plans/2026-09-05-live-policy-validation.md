@@ -32,10 +32,12 @@ improvement claim.
 - Pre-change full suite: 153 passed.
 - Session import task after review fixes: 173 full-suite tests passed; importer
   module coverage 86%.
-- Replay/comparison/CLI focused tests: 25 passed after hardening.
-- Independent full suite on `dc41f45`: 190 passed in 2.05 seconds. Combined
+- Replay/comparison/CLI focused tests: 45 passed after review hardening.
+- Independent full suite on `c656cd8`: 210 passed in 2.07 seconds. Combined
   coverage of the three new evaluation modules: 86% (importer 86%, replay 91%,
   comparison 82%). CLI help and whitespace checks also passed.
+- CLI with valid comparison inputs but no key printed the enforced bounds and
+  returned exit 2 before any request.
 - Bundled offline engine check `dm-2026-05-29`: passed independently.
 - Historical-failure experiment (3–5 targets plus independent guards): pending
   real session data and curated assertions.
@@ -62,7 +64,9 @@ The example source is on `example.invalid`, not a real financial source.
   Production policy/gap state was not touched by the comparison.
 
 After the live run, additional offline regression tests hardened unknown-tool
-handling and per-pair resolved-model drift. No further paid calls were needed.
+handling, strict terminal completion (empty/filtered/truncated responses), finite
+positive runtime budgets, and per-run/per-pair resolved-model drift. No further
+paid calls were needed.
 The actual credential value was checked against changed files and local smoke
 JSON artifacts and was not present.
 

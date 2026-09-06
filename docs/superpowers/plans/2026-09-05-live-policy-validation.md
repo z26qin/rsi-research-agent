@@ -32,10 +32,11 @@ improvement claim.
 - Pre-change full suite: 153 passed.
 - Session import task after review fixes: 173 full-suite tests passed; importer
   module coverage 86%.
-- Replay/comparison/CLI focused tests: 45 passed after review hardening.
-- Independent full suite on `c656cd8`: 210 passed in 2.07 seconds. Combined
-  coverage of the three new evaluation modules: 86% (importer 86%, replay 91%,
-  comparison 82%). CLI help and whitespace checks also passed.
+- Final focused evaluation/runtime/CLI tests: 66 passed after review hardening.
+- Independent full suite on `9948fb4`: 212 passed in 2.05 seconds. Combined
+  coverage of the three new evaluation modules: 86% (importer 87%, replay 91%,
+  comparison 83%). CLI help and whitespace checks also passed.
+- Whole-branch review and final scoped re-review approved; no remaining findings.
 - CLI with valid comparison inputs but no key printed the enforced bounds and
   returned exit 2 before any request.
 - Bundled offline engine check `dm-2026-05-29`: passed independently.
@@ -67,6 +68,10 @@ After the live run, additional offline regression tests hardened unknown-tool
 handling, strict terminal completion (empty/filtered/truncated responses), finite
 positive runtime budgets, and per-run/per-pair resolved-model drift. No further
 paid calls were needed.
+Final offline-tested hardening also validates the complete case identity and freezes
+base profiles once per comparison, persisting their exact text and SHA-256. The
+earlier live smoke report remains the original record and was not rewritten to
+pretend it exercised changes added afterward.
 The actual credential value was checked against changed files and local smoke
 JSON artifacts and was not present.
 

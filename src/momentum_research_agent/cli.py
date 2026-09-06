@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from momentum_research_agent.agents.budget import LoopBudget
 from momentum_research_agent.agents.sub_agent import SubAgent
 from momentum_research_agent.agents.verifier import Verifier
 from momentum_research_agent.config import (
@@ -64,8 +66,8 @@ def _positive_int(value: str) -> int:
 
 def _positive_float(value: str) -> float:
     parsed = float(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError("must be finite and positive")
     return parsed
 
 
@@ -373,25 +375,29 @@ async def async_main(args: argparse.Namespace) -> int:
         except RuntimeError as exc:
             console.print(f"[red]{exc}[/red]")
             return 2
-        report, path = await run_live_compare(
-            client=client,
-            requested_model=args.model or sub_agent_model(),
-            project_root=project_root,
-            baseline_policy=baseline,
-            candidate_policy=candidate,
-            cases=cases,
-            expectations=expectations,
-            repeats=args.repeats,
-            max_cases=args.max_cases,
-            request_budget=LLMRequestBudget(max_attempts=args.max_llm_calls),
-            max_output_tokens=args.max_output_tokens,
-            budget=LoopBudget(
-                max_turns=args.max_turns,
-                overall_deadline_s=args.overall_deadline_s,
-                llm_timeout_s=args.llm_timeout_s,
-                tool_timeout_s=args.tool_timeout_s,
-            ),
-        )
+        try:
+            report, path = await run_live_compare(
+                client=client,
+                requested_model=args.model or sub_agent_model(),
+                project_root=project_root,
+                baseline_policy=baseline,
+                candidate_policy=candidate,
+                cases=cases,
+                expectations=expectations,
+                repeats=args.repeats,
+                max_cases=args.max_cases,
+                request_budget=LLMRequestBudget(max_attempts=args.max_llm_calls),
+                max_output_tokens=args.max_output_tokens,
+                budget=LoopBudget(
+                    max_turns=args.max_turns,
+                    overall_deadline_s=args.overall_deadline_s,
+                    llm_timeout_s=args.llm_timeout_s,
+                    tool_timeout_s=args.tool_timeout_s,
+                ),
+            )
+        except ValueError:
+            console.print("[red]Live comparison rejected invalid inputs.[/red]")
+            return 2
         console.print(f"[bold]Behavioral shadow[/bold] {report.outcome}: {path}")
         console.print(
             f"observed_no_regression={report.observed_no_regression}; "

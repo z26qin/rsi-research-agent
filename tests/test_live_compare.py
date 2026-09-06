@@ -122,7 +122,7 @@ def _run(
     policy_version_id: str,
     *,
     passed_shape: str,
-    model: str = "resolved-model",
+    model: str | list[str] = "resolved-model",
 ) -> ReplayRunResult:
     observation = case.tool_traces[0].observation
     call = ReplayCall(
@@ -186,7 +186,7 @@ def _run(
         case_sha256=case_content_sha256(case),
         policy_version_id=policy_version_id,
         requested_model="requested",
-        response_model_ids=[model],
+        response_model_ids=[model] if isinstance(model, str) else model,
         max_output_tokens=128,
         completed=True,
         outcome="success",
@@ -393,8 +393,7 @@ async def test_comparison_fails_closed_on_hash_mismatch_missing_guard_or_model_d
     async def drifting_run(**kwargs):
         kwargs["request_budget"].claim()
         is_baseline = kwargs["policy"].version_id == baseline.version_id
-        is_target = kwargs["case"].case_id == target.case_id
-        model = "model-a" if is_baseline == is_target else "model-b"
+        model = ["model-a", "model-b"] if is_baseline else ["model-b", "model-a"]
         shape = "withhold" if kwargs["case"].case_id == target.case_id else "grounded"
         return _run(kwargs["case"], kwargs["policy"].version_id, passed_shape=shape, model=model)
 
@@ -415,3 +414,58 @@ async def test_comparison_fails_closed_on_hash_mismatch_missing_guard_or_model_d
     assert report.model_fairness is False
     assert report.observed_no_regression is False
     assert "resolved_model_mismatch" in report.reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repeats", True),
+        ("repeats", 1.5),
+        ("max_cases", float("nan")),
+        ("max_cases", float("inf")),
+        ("max_output_tokens", 1.5),
+    ],
+)
+@pytest.mark.asyncio
+async def test_direct_comparison_rejects_non_integral_bounds_before_requests(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    target = _case(tmp_path, "target", "No support.")
+    guard = _case(
+        tmp_path,
+        "guard",
+        '{"url":"https://example.test/filing","snippet":"Synthetic filing evidence."}',
+    )
+    store = PolicyStore(tmp_path)
+    baseline = store.load_active()
+    candidate = merge_policy_patch(
+        baseline,
+        PolicyPatch(prompt_overlays={"flow_analyst": "Withhold."}),
+        trigger_ids=[target.case_id],
+    )
+    values = {"repeats": 1, "max_cases": 2, "max_output_tokens": 64}
+    values[field] = value
+    request_budget = LLMRequestBudget(max_attempts=4)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        await run_live_compare(
+            client=object(),
+            requested_model="requested",
+            project_root=tmp_path,
+            baseline_policy=baseline,
+            candidate_policy=candidate,
+            cases=[target, guard],
+            expectations=BehavioralExpectationSet(
+                expectations=[
+                    _expectation(target, kind="target", withhold=True),
+                    _expectation(guard, kind="guard"),
+                ]
+            ),
+            request_budget=request_budget,
+            budget=LoopBudget(max_turns=2),
+            **values,
+        )
+
+    assert request_budget.attempts == 0

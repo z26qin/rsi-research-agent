@@ -185,3 +185,82 @@ research quality.
 - Evidence assertions are deliberately narrow and literal (call arguments plus consumed
   URL/excerpt provenance or withholding). Broader semantic judging would require a
   separately reviewed design and must not be inferred from these results.
+
+## Review round 1
+
+Resolved all confirmed completion, numeric-bound, model-fairness, and CLI error-boundary
+findings without another paid request.
+
+### Strict ReAct completion
+
+- Detailed completion now uses only the current response content. A prior tool turn's
+  text cannot become the final report when the terminal response is empty.
+- A terminal result succeeds only for explicit `finish_reason="stop"` with non-empty
+  content. `content_filter`, missing reason, and other non-stop terminal reasons are
+  incomplete.
+- `finish_reason="length"` is rejected before any included tool call can execute. It
+  cannot consume an observation, continue to a later response, or pass.
+- Max-turn-after-tool remains incomplete. The legacy `react_loop()` wrapper still
+  returns the detailed result text for existing callers.
+
+Review RED reproduced all three false-success paths:
+
+```text
+valid tool-turn JSON + matched call + empty stop: expected incomplete, got completed
+content_filter final: expected incomplete, got completed
+length + tool call + later valid final: expected incomplete, got completed
+```
+
+The three detailed-loop cases plus the end-to-end replay regression now pass (`4 passed
+in 0.35s`).
+
+### Numeric bounds
+
+- `LoopBudget` now requires a positive integral, non-boolean `max_turns` and finite,
+  positive, non-boolean deadlines/timeouts.
+- `LLMRequestBudget` requires positive integral, non-boolean request limits and valid
+  integral attempted counts.
+- Direct replay/comparison output, repeat, and case bounds require positive integers;
+  bools, fractions, NaN, and infinities fail before a request.
+- CLI floating bounds reject NaN and infinities. The CLI also now imports `LoopBudget`,
+  closing an offline-test-discovered `NameError` on the live command path.
+
+Review RED produced 16 deterministic validation failures across constructors, direct
+comparison, and CLI parsing. Focused GREEN: `16 passed in 0.43s`.
+
+### Resolved-model fairness and CLI failures
+
+- Every individual run must have exactly one non-empty, non-`unknown` resolved model
+  identity. Baseline and candidate identities must match for the same case/repeat pair.
+  Reversed `[model-a, model-b]` / `[model-b, model-a]` sequences now fail instead of
+  passing through set equality.
+- Expected comparison validation failures (same policy, missing expectation binding,
+  missing target/guard, invalid direct bounds) now produce a concise sanitized CLI
+  message and exit code 2 rather than a traceback or raw exception content.
+
+Both isolated regressions pass.
+
+### Review verification
+
+```text
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest \
+  tests/test_react_loop.py tests/test_replay_runner.py tests/test_live_compare.py \
+  tests/test_live_compare_cli.py \
+  --cov=momentum_research_agent.eval.replay_runner \
+  --cov=momentum_research_agent.eval.live_compare \
+  --cov-report=term-missing -q
+
+45 passed in 1.12s
+live_compare.py: 282 statements, 50 missed, 82% coverage
+replay_runner.py: 180 statements, 17 missed, 91% coverage
+total: 85% coverage
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m compileall -q \
+  src/momentum_research_agent
+
+PYTHONPATH=src ../apodex-policy-loop/.venv/bin/python -m pytest -q
+210 passed in 1.23s
+
+git diff --check
+# exit 0
+```

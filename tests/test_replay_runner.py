@@ -421,3 +421,61 @@ async def test_budget_exhaustion_and_length_truncation_cannot_succeed(tmp_path: 
     )
     assert truncated.outcome == "failed"
     assert truncated.reasons == ["output_length_truncated"]
+
+
+@pytest.mark.parametrize("value", [True, 1.5, float("nan"), float("inf")])
+def test_request_budget_rejects_non_integral_bounds(value: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        LLMRequestBudget(max_attempts=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_matched_tool_call_cannot_pass(tmp_path: Path) -> None:
+    case = _case(tmp_path)
+    policy = PolicyStore(tmp_path).load_version(case.policy_version_id or "")
+    client = FakeClient(
+        [
+            FakeResponse(
+                _message(
+                    content=json.dumps(
+                        {
+                            "task_id": "task-1",
+                            "title": "Synthetic task",
+                            "agent_role": "flow_analyst",
+                            "summary": "Stale tool-turn report.",
+                            "status": "complete",
+                            "findings": [],
+                        }
+                    ),
+                    tool_calls=[
+                        FakeToolCall(
+                            "call-1", "web_search", '{"query":"synthetic replay"}'
+                        )
+                    ],
+                ),
+                finish_reason="tool_calls",
+                model="resolved",
+            ),
+            FakeResponse(
+                _message(""),
+                finish_reason="stop",
+                model="resolved",
+            ),
+        ]
+    )
+
+    result = await run_replay_case(
+        client=client,
+        requested_model="model",
+        project_root=tmp_path,
+        case=case,
+        policy=policy,
+        budget=LoopBudget(max_turns=3),
+        request_budget=LLMRequestBudget(max_attempts=2),
+        max_output_tokens=128,
+    )
+
+    assert result.outcome == "failed"
+    assert result.report is None
+    assert result.raw_output == ""
+    assert result.reasons == ["empty_final"]

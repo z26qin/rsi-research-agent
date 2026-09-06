@@ -153,24 +153,38 @@ async def react_loop_detailed(
 
         choice = response.choices[0]
         message = choice.message
-        last_text = message.content or last_text
+        current_text = message.content or ""
         tool_calls = getattr(message, "tool_calls", None) or []
+        finish_reason = str(getattr(choice, "finish_reason", "") or "")
         messages.append(_assistant_message(message))
 
+        if finish_reason == "length":
+            return ReactLoopResult(
+                text=current_text,
+                completed=False,
+                stop_reason="length",
+            )
+
         if not tool_calls:
-            finish_reason = str(getattr(choice, "finish_reason", "") or "")
-            if finish_reason == "length":
+            if finish_reason != "stop":
                 return ReactLoopResult(
-                    text=last_text or "",
+                    text=current_text,
                     completed=False,
-                    stop_reason="length",
+                    stop_reason=finish_reason or "missing_finish_reason",
+                )
+            if not current_text.strip():
+                return ReactLoopResult(
+                    text="",
+                    completed=False,
+                    stop_reason="empty_final",
                 )
             return ReactLoopResult(
-                text=last_text or "",
+                text=current_text,
                 completed=True,
                 stop_reason="completed",
             )
 
+        last_text = current_text or last_text
         for call in tool_calls:
             name = call.function.name
             arguments = _parse_arguments(call.function.arguments)

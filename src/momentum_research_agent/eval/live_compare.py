@@ -33,6 +33,11 @@ def _canonical_json(value: Any) -> str:
     )
 
 
+def _require_positive_integer(label: str, value: Any) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{label} must be a positive integer")
+
+
 class ExpectedToolCall(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -346,8 +351,7 @@ async def run_live_compare(
         ("max_cases", max_cases),
         ("max_output_tokens", max_output_tokens),
     ):
-        if value <= 0:
-            raise ValueError(f"{label} must be positive")
+        _require_positive_integer(label, value)
     if baseline_policy.version_id == candidate_policy.version_id:
         raise ValueError("baseline and candidate policies must differ")
     if baseline_policy.version_id != _expected_version_id(baseline_policy):
@@ -421,9 +425,11 @@ async def run_live_compare(
             baseline_models = set(baseline_run.result.response_model_ids)
             candidate_models = set(candidate_run.result.response_model_ids)
             if (
-                not baseline_models
+                len(baseline_models) != 1
+                or len(candidate_models) != 1
                 or "unknown" in baseline_models
-                or baseline_models != candidate_models
+                or "unknown" in candidate_models
+                or next(iter(baseline_models)) != next(iter(candidate_models))
             ):
                 model_fairness = False
 

@@ -43,9 +43,16 @@ class LLMRequestBudget:
     attempts: int = 0
 
     def __post_init__(self) -> None:
+        if not isinstance(self.max_attempts, int) or isinstance(self.max_attempts, bool):
+            raise ValueError("max_attempts must be a positive integer")
         if self.max_attempts <= 0:
-            raise ValueError("max_attempts must be positive")
-        if self.attempts < 0 or self.attempts > self.max_attempts:
+            raise ValueError("max_attempts must be a positive integer")
+        if (
+            not isinstance(self.attempts, int)
+            or isinstance(self.attempts, bool)
+            or self.attempts < 0
+            or self.attempts > self.max_attempts
+        ):
             raise ValueError("attempts must be within the request budget")
 
     def claim(self) -> None:
@@ -211,8 +218,10 @@ async def run_replay_case(
     temperature: float = 0.0,
 ) -> ReplayRunResult:
     """Rerun one case without allowing any live tool execution."""
+    if not isinstance(max_output_tokens, int) or isinstance(max_output_tokens, bool):
+        raise ValueError("max_output_tokens must be a positive integer")
     if max_output_tokens <= 0:
-        raise ValueError("max_output_tokens must be positive")
+        raise ValueError("max_output_tokens must be a positive integer")
     started = time.monotonic()
     case_hash = case_content_sha256(case)
     calls: list[ReplayCall] = []

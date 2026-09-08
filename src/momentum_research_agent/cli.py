@@ -132,6 +132,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Daily brief source (default: engine); etf-proxy fetches public ETF data.")
     parser.add_argument("--as-of", type=_as_of_date,
                         help="Completed-session date YYYY-MM-DD; required for engine, optional for ETF proxy.")
+    parser.add_argument("--with-crowding", action="store_true",
+                        help="Add optional issuer flows, concentration and overlap to ETF proxy mode (no LLM).")
     parser.add_argument("--previous-brief", type=Path,
                         help="Optional earlier brief.json to compare with --daily-brief.")
     commands.add_argument(
@@ -303,6 +305,11 @@ async def async_main(args: argparse.Namespace) -> int:
     console = Console()
     project_root = find_project_root()
 
+    if getattr(args, "with_crowding", False) and (
+            not getattr(args, "daily_brief", False) or getattr(args, "brief_source", None) != "etf-proxy"):
+        console.print("--with-crowding requires --daily-brief --brief-source etf-proxy.")
+        return 2
+
     if getattr(args, "daily_brief", False):
         source = getattr(args, "brief_source", None) or "engine"
         if (args.as_of is None and source == "engine") or args.question or args.resume:
@@ -314,7 +321,10 @@ async def async_main(args: argparse.Namespace) -> int:
             if source == "etf-proxy":
                 from momentum_research_agent.proxy_brief import run_proxy_brief
                 console.print("ETF proxy: public data collection capped at 120s; 0 LLM requests.")
-                brief = await asyncio.to_thread(run_proxy_brief, args.as_of, output, args.previous_brief)
+                if getattr(args, "with_crowding", False):
+                    console.print("Optional issuer collection: up to an additional 120s; no crowding score.")
+                brief = await asyncio.to_thread(run_proxy_brief, args.as_of, output, args.previous_brief,
+                                               with_crowding=getattr(args, "with_crowding", False))
             else:
                 from momentum_research_agent.daily_brief import run_daily_brief
                 console.print("Checking input coverage; at most one 90s offline engine run; 0 LLM requests.")

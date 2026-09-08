@@ -28,6 +28,7 @@ class ProxyBrief(BaseModel):
     sources: dict = Field(default_factory=dict)
     metrics: dict[str, float | None] = Field(default_factory=dict)
     vix: dict = Field(default_factory=dict)
+    crowding: dict = Field(default_factory=dict)
     changes: dict = Field(default_factory=dict)
     comparison_note: str = "No previous proxy brief supplied."
     limitations: list[str] = Field(default_factory=list)
@@ -65,6 +66,24 @@ def replay_snapshot(root: Path) -> dict[str, float | None]:
     """Recompute solely from saved, checked tables; never contacts a provider."""
     manifest, panels = load_snapshot(root)
     return calculate(panels, date.fromisoformat(manifest["target_date"]))
+
+
+def replay_crowding(root: Path) -> dict:
+    from momentum_research_agent.crowding_data import replay
+    report = ProxyBrief.model_validate_json((root / "brief.json").read_text())
+    checked_path(root, "manifest.json", report.manifest_sha256)
+    checked_path(root, "crowding/manifest.json", report.crowding["manifest_sha256"])
+    manifest = json.loads((root / "manifest.json").read_text())
+    if (manifest["schema_version"] != "etf_proxy_snapshot_v1" or
+            manifest["calculation_version"] != CALCULATION_VERSION):
+        raise ValueError("Unsupported core snapshot")
+    prices = None
+    if report.status == "partial":
+        _, panels = load_snapshot(root)
+        prices = panels["MTUM"]
+    if manifest["target_date"] != report.requested_as_of.isoformat():
+        raise ValueError("Report target does not match snapshot")
+    return replay(root / "crowding", prices)
 
 
 def compare_previous(result: ProxyBrief, panels: dict, previous: Path) -> None:
@@ -122,13 +141,17 @@ def render_proxy(result: ProxyBrief) -> str:
     lines += ["", "## Changes from previous brief", "", result.comparison_note, ""]
     lines.extend(f"- {name}: {item['previous']:.2%} → {item['current']:.2%} "
                  f"(change {100 * item['delta']:+.2f} percentage points)" for name, item in result.changes.items())
+    if result.crowding:
+        from momentum_research_agent.crowding_data import render
+        lines += ["", render(result.crowding)]
     lines += ["", "## Limitations", "", *[f"- {item}" for item in result.limitations], "",
               f"Calculation version: `{result.calculation_version}`. Manifest SHA256: `{result.manifest_sha256}`.", "",
               "Saved vendor-returned tables are not raw HTTP responses. The manifest links vendor and normalized file hashes.", ""]
     return "\n".join(lines)
 
 
-def run_proxy_brief(requested: date | None, output: Path, previous: Path | None = None) -> ProxyBrief:
+def run_proxy_brief(requested: date | None, output: Path, previous: Path | None = None,
+                    *, with_crowding: bool = False) -> ProxyBrief:
     as_of = target_date(requested)
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -161,6 +184,13 @@ def run_proxy_brief(requested: date | None, output: Path, previous: Path | None 
         result.status = "unavailable"
         result.metrics = {}
         result.limitations.append(f"Core snapshot unavailable or invalid ({type(exc).__name__}); assessment withheld.")
+    if with_crowding:
+        try:
+            from momentum_research_agent.crowding_data import build
+            result.crowding = build(output / "crowding", as_of, previous,
+                                    panels["MTUM"] if result.status == "partial" else None)
+        except (OSError, ValueError, KeyError, TypeError):
+            result.crowding = {"status": "unavailable", "reason": "Optional issuer snapshot failed; price brief preserved"}
     (output / "brief.md").write_text(render_proxy(result), encoding="utf-8")
     save_json(output / "brief.json", result.model_dump(mode="json"))
     return result

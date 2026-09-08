@@ -111,3 +111,39 @@ def test_optional_corrupt_vix_does_not_withhold_etf_metrics(provider, tmp_path, 
     assert result.status == "partial"
     assert result.metrics["MTUM.return_1d"] is not None
     assert not result.vix
+
+
+@pytest.mark.asyncio
+async def test_cli_crowding_sidecar_is_optional_replayable_and_nonblocking(provider, tmp_path, monkeypatch):
+    from momentum_research_agent import cli, crowding_data
+    from test_crowding_metrics import payload
+    from momentum_research_agent.proxy_data import save_json
+    monkeypatch.setattr(crowding_data, "run_worker", lambda symbol, path, timeout: save_json(path, payload(ticker=symbol)))
+    args = cli.build_parser().parse_args(["--daily-brief", "--brief-source", "etf-proxy", "--with-crowding",
+                                         "--as-of", "2026-09-04", "--session-dir", str(tmp_path / "run")])
+    assert await cli.async_main(args) == 0
+    report = json.loads((tmp_path / "run/brief.json").read_text())
+    assert report["crowding"]["status"] == "partial"
+    assert "Weighted overlap" in (tmp_path / "run/brief.md").read_text()
+    assert brief.replay_crowding(tmp_path / "run") == report["crowding"]
+    assert await cli.async_main(cli.build_parser().parse_args(["--with-crowding", "question"])) == 2
+    assert await cli.async_main(cli.build_parser().parse_args(["--daily-brief", "--as-of", "2026-09-04", "--with-crowding"])) == 2
+    def failure(*args, **kwargs): raise OSError("source down")
+    monkeypatch.setattr(crowding_data, "run_worker", failure)
+    result = brief.run_proxy_brief(date(2026, 9, 4), tmp_path / "failed", with_crowding=True)
+    assert result.status == "partial"
+    assert result.crowding["status"] == "unavailable"
+    assert len(result.metrics) == 16
+
+
+def test_optional_issuer_replay_with_unavailable_core(provider, tmp_path, monkeypatch):
+    from momentum_research_agent import crowding_data
+    from test_crowding_metrics import payload
+    from momentum_research_agent.proxy_data import save_json
+    provider["SPY"] = provider["SPY"].iloc[:-1]
+    monkeypatch.setattr(crowding_data, "run_worker", lambda symbol, path, timeout: save_json(path, payload(ticker=symbol)))
+    output = tmp_path / "run"
+    result = brief.run_proxy_brief(date(2026, 9, 4), output, with_crowding=True)
+    assert result.status == "unavailable"
+    assert result.crowding["status"] == "partial"
+    assert brief.replay_crowding(output) == result.crowding

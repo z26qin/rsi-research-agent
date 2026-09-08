@@ -52,6 +52,17 @@ the inputs, and computes returns, relative performance, drawdown and volatility.
 No key or LLM is used. It is not the original engine or a crash-probability model.
 See [ETF proxy usage, data checks and offline replay](docs/etf-proxy-brief.md).
 
+Add optional issuer flows, concentration and cross-fund holdings overlap:
+
+```bash
+uv run momentum-research-agent --daily-brief --brief-source etf-proxy --with-crowding
+```
+
+This adds MTUM/QUAL/IVV issuer snapshots and partial crowding evidence, not a
+crowding score. MTUM net creations require a compatible preceding-session brief
+supplied with `--previous-brief`; the first run reports unavailable flows.
+See [definitions, limitations and offline replay](docs/crowding-indicators.md).
+
 The original **engine** workflow remains the default:
 
 ```bash

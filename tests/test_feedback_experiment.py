@@ -189,6 +189,15 @@ async def test_capture_real_engine_with_fake_llm(tmp_path, monkeypatch):
     assert not experiment.PolicyStore(tmp_path).active_path.exists()
     assert all(call["extra_body"]["thinking"] == {"type": "disabled"} for call in raw.calls)
     assert "Keep the final ResearchReport compact" in raw.calls[0]["messages"][1]["content"]
+    system = raw.calls[0]["messages"][0]["content"]
+    assert "web_search" not in system
+    assert "market_data" not in system
+    assert "file_reader" not in system
+    assert "After the snapshot returns, stop calling tools" in system
+    assert "Do not fabricate URLs" in system
+    frozen = (tmp_path / "profiles" / "momentum_analyst.md").read_text()
+    assert frozen == experiment.load_profile("momentum_analyst", tmp_path, apply_overlay=False)
+    assert "After the snapshot returns, stop calling tools" in frozen
 
 
 @pytest.mark.asyncio
@@ -274,3 +283,8 @@ async def test_experiment_forces_non_thinking_without_mutating_extra_body(tmp_pa
     assert create.call_args.kwargs["extra_body"] == {
         "thinking": {"type": "disabled"}, "other_option": "preserved"}
     assert extra["thinking"] == {"type": "enabled"}
+
+
+def test_scoped_profile_rejects_unknown_layout():
+    with pytest.raises(ValueError):
+        experiment.engine_only_profile("A different profile format")

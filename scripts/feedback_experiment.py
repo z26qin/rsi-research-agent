@@ -129,6 +129,22 @@ async def capture(folder, client, state):
             os.environ["MOMENTUM_ENGINE_DIR"] = previous
 
 
+def engine_only_profile(text):
+    """Scope the experiment copy, retaining expertise and output/safety guidance."""
+    expertise, tools_marker, remainder = text.partition("Your tools:")
+    _, output_marker, output = remainder.partition("Your output is")
+    if not tools_marker or not output_marker:
+        raise ValueError("unknown analyst profile layout; cannot scope experiment safely")
+    return (expertise + "Your tools:\n- engine_query: the only available tool in this experiment.\n\n"
+            "Investigation approach:\n"
+            "Query engine_query once with ticker='SPY' and end='2026-05-29'. "
+            "After the snapshot returns, stop calling tools and produce the final ResearchReport JSON. "
+            "Do not probe for other tools or repeat the query with different arguments. "
+            "Use only the returned historical snapshot; do not invent ticker-specific facts. "
+            "State missing evidence and limitations in unanswered_questions; "
+            "return partial or insufficient_evidence when appropriate.\n\n" + output_marker + output)
+
+
 async def _capture(folder, client, state):
     # Pin the bundled historical engine explicitly; never silently collect fallback data.
     engine = await asyncio.to_thread(run_pipeline, "2026-05-29", project_root=ROOT,
@@ -147,7 +163,7 @@ async def _capture(folder, client, state):
     profile = "momentum_analyst"
     (folder / "profiles").mkdir(exist_ok=True)
     (folder / "profiles" / f"{profile}.md").write_text(
-        load_profile(profile, ROOT, apply_overlay=False), encoding="utf-8")
+        engine_only_profile(load_profile(profile, ROOT, apply_overlay=False)), encoding="utf-8")
     board = TaskBoard(session, question=QUESTION)
     task = board.add_task("Historical momentum risk", QUESTION, profile)
     board.activate(task.id)

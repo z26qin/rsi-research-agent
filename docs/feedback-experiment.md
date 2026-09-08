@@ -33,6 +33,10 @@ Tool observations are persisted immediately, so a later provider error cannot
 erase them. Incomplete runs and malformed final reports block the task rather
 than becoming research failures for reflection. The engine-directory environment
 setting is restored on exit, including failure.
+The experiment profile copy replaces the normal multi-tool investigation steps
+with one engine query followed by a final report. Expertise and output/safety
+guidance are retained. Committed analyst profiles are untouched; capture and
+replay both load the same scoped snapshot.
 
 Thinking is explicitly disabled in every experiment request (capture, preflight,
 reflection, and both comparison variants). This avoids relying on provider
@@ -64,7 +68,8 @@ replayable failure, provide:
 1. `reviewed-cases.json`: exactly two full existing `SessionEvalCase` objects:
    one unchanged case from `captured-cases.json`, and one real historical
    regression case expected to pass now. Both must use the pinned policy and same
-   analyst profile. Do not invent a gap or label synthetic data as real to create
+   analyst profile. The guard must also be compatible with the scoped SPY /
+   2026-05-29 engine-only task. Do not invent a gap or label synthetic data as real to create
    a guard. If no suitable guard exists, stop and collect/review one separately.
 2. `expectations.json`: the existing `BehavioralExpectationSet` schema, one
    `target` and one `guard`. Include reviewer, provenance, rationale, exact
@@ -112,3 +117,21 @@ generated, no comparison ran, and no policy was activated. That attempt preceded
 the response-diagnostics addition, so the precise provider finish reason was not
 retained; do not infer a confirmed research failure from it. Its local state is
 `reports/feedback-20260908/state.json`. It has not been reset or retried.
+
+## Controlled validations (2026-09-08)
+
+The original failed directory remains unchanged. Separately preserved retries
+carry forward its request count rather than starting a fresh budget:
+
+- `reports/feedback-20260908-retry1`: 3 additional requests, cumulative 6/20.
+  Non-thinking API calls succeeded, but the normal analyst profile requested
+  unavailable tools and exhausted the three-turn limit without a report.
+- `reports/feedback-20260908-retry2`: with the scoped engine-only profile, 2
+  additional requests, cumulative 8/20. One valid historical engine query was
+  followed by a completed, schema-validated report (`status=partial`). Static
+  audit returned `pass_with_caveats` and imported five replayable unanswered-question
+  gaps. These are review candidates, not demonstrated agent errors or improvement.
+
+The latest experiment remains `review_required`; no human expectations, candidate
+patch, paired comparison, or promotion have been produced. Twelve requests remain
+in the original allowance. The normal tool code and active policy were not changed.

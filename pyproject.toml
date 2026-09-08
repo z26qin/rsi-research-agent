@@ -36,11 +36,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/momentum_research_agent"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/momentum_research_agent/coordinator/prompts" = "momentum_research_agent/coordinator/prompts"
-"src/momentum_research_agent/agents/profiles" = "momentum_research_agent/agents/profiles"
-"src/momentum_research_agent/eval/fixtures" = "momentum_research_agent/eval/fixtures"
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

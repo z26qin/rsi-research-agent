@@ -127,9 +127,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_mutually_exclusive_group()
     commands.add_argument("--daily-brief", action="store_true",
-                          help="Write an engine or ETF proxy daily brief (no LLM).")
+                          help="Write an engine or ETF proxy daily brief; LLM only with --with-market-research.")
     commands.add_argument("--backfill-crowding", action="store_true",
                           help="Prepare exact-date historical issuer holdings and optional comparison (no LLM).")
+    commands.add_argument("--simulate-basket", action="store_true",
+                          help="Retrospective fixed MTUM basket; explicit look-ahead bias, no LLM.")
+    parser.add_argument("--basket-brief", type=Path, help="Validated later MTUM holdings brief for --simulate-basket.")
+    parser.add_argument("--start-date", type=_as_of_date, help="Starting close for --simulate-basket.")
+    parser.add_argument("--basket-prices", type=Path, help="Optional offline long-format yfinance parquet for --simulate-basket.")
     parser.add_argument("--issuer-files", type=Path,
                         help="Offline issuer_file_import_v1 manifest for --backfill-crowding.")
     parser.add_argument("--compare-brief", type=Path,
@@ -140,6 +145,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Completed-session date YYYY-MM-DD; required for engine, optional for ETF proxy.")
     parser.add_argument("--with-crowding", action="store_true",
                         help="Add optional issuer flows, concentration and overlap to ETF proxy mode (no LLM).")
+    parser.add_argument("--with-market-research", action="store_true",
+                        help="Answer five daily questions with issuer data, FINRA short interest and at most one LLM call.")
+    parser.add_argument("--reference-date", type=_as_of_date,
+                        help="Optional retrospective baseline for --with-market-research (e.g. 2026-05-29).")
+    parser.add_argument("--no-brief-llm", action="store_true",
+                        help="Use deterministic market-research answers without an API key.")
     parser.add_argument("--previous-brief", type=Path,
                         help="Optional earlier brief.json to compare with --daily-brief.")
     commands.add_argument(
@@ -311,6 +322,40 @@ async def async_main(args: argparse.Namespace) -> int:
     console = Console()
     project_root = find_project_root()
 
+    market = getattr(args, "with_market_research", False)
+    if (market and (not getattr(args, "daily_brief", False) or args.brief_source != "etf-proxy")) or (
+            not market and (getattr(args, "reference_date", None) is not None or getattr(args, "no_brief_llm", False))):
+        console.print("Market options require --daily-brief --brief-source etf-proxy --with-market-research.")
+        return 2
+    if market and args.reference_date is not None:
+        from momentum_research_agent.proxy_metrics import target_date, sessions
+        try:
+            if args.reference_date >= target_date(args.as_of) or args.reference_date not in sessions(args.reference_date, args.reference_date).date:
+                raise ValueError("Invalid reference")
+        except ValueError:
+            console.print("--reference-date must be an earlier XNYS trading session.")
+            return 2
+
+    if getattr(args, "simulate_basket", False):
+        if (args.basket_brief is None or args.start_date is None or args.question or args.resume
+                or args.brief_source or args.with_crowding or args.previous_brief or args.issuer_files or args.compare_brief):
+            console.print("--simulate-basket requires --basket-brief and --start-date; cannot mix research or daily-brief options.")
+            return 2
+        from momentum_research_agent.fixed_basket import run
+        output = args.session_dir or reports_root(project_root) / f"basket_{new_session_id()}"
+        console.print("Retrospective basket: LOOK-AHEAD BIAS; up to 120s collection budget; 0 LLM requests.")
+        try:
+            result = await asyncio.to_thread(run, args.basket_brief, args.start_date, output, args.as_of, args.basket_prices)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            console.print(f"Cannot simulate basket ({type(exc).__name__}); check snapshot, dates and use a new output directory.")
+            return 2
+        console.print(f"Basket: {result['status']}. Output: {output.resolve() / 'simulation.md'}")
+        return 2 if result["status"] == "unavailable" else 0
+
+    if any(getattr(args, name, None) is not None for name in ("basket_brief", "start_date", "basket_prices")):
+        console.print("--basket-brief, --start-date and --basket-prices require --simulate-basket.")
+        return 2
+
     if getattr(args, "backfill_crowding", False):
         if (args.as_of is None or args.question or args.resume or args.brief_source or args.with_crowding
                 or args.previous_brief):
@@ -347,10 +392,15 @@ async def async_main(args: argparse.Namespace) -> int:
             if source == "etf-proxy":
                 from momentum_research_agent.proxy_brief import run_proxy_brief
                 console.print("ETF proxy: public data collection capped at 120s; 0 LLM requests.")
-                if getattr(args, "with_crowding", False):
+                if getattr(args, "with_crowding", False) or market:
                     console.print("Optional issuer collection: up to an additional 120s; no crowding score.")
                 brief = await asyncio.to_thread(run_proxy_brief, args.as_of, output, args.previous_brief,
-                                               with_crowding=getattr(args, "with_crowding", False))
+                                               with_crowding=getattr(args, "with_crowding", False) or market)
+                if market:
+                    from momentum_research_agent.market_brief import run
+                    console.print("Market research: FINRA collection up to an additional 120s; at most one 25s LLM request (optional).")
+                    await run(output, args.reference_date, llm=not args.no_brief_llm, previous=args.previous_brief)
+                    console.print(f"Market brief: {output.resolve() / 'market_brief.md'}")
             else:
                 from momentum_research_agent.daily_brief import run_daily_brief
                 console.print("Checking input coverage; at most one 90s offline engine run; 0 LLM requests.")

@@ -63,6 +63,11 @@ crowding score. MTUM net creations require a compatible preceding-session brief
 supplied with `--previous-brief`; the first run reports unavailable flows.
 See [definitions, limitations and offline replay](docs/crowding-indicators.md).
 
+For historical holdings, use `--backfill-crowding --as-of YYYY-MM-DD` and optionally
+`--compare-brief <newer-brief.json>`. Exact-date issuer downloads are best effort;
+`--issuer-files <import.json>` supports offline original-file imports when the
+historical route is unavailable. See [historical data preparation](docs/historical-crowding.md).
+
 The original **engine** workflow remains the default:
 
 ```bash

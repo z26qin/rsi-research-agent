@@ -128,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_mutually_exclusive_group()
     commands.add_argument("--daily-brief", action="store_true",
                           help="Write an engine or ETF proxy daily brief (no LLM).")
+    commands.add_argument("--backfill-crowding", action="store_true",
+                          help="Prepare exact-date historical issuer holdings and optional comparison (no LLM).")
+    parser.add_argument("--issuer-files", type=Path,
+                        help="Offline issuer_file_import_v1 manifest for --backfill-crowding.")
+    parser.add_argument("--compare-brief", type=Path,
+                        help="Newer ETF brief.json or backfill.json to compare with historical holdings.")
     parser.add_argument("--brief-source", choices=("engine", "etf-proxy"),
                         help="Daily brief source (default: engine); etf-proxy fetches public ETF data.")
     parser.add_argument("--as-of", type=_as_of_date,
@@ -304,6 +310,26 @@ async def run_single(
 async def async_main(args: argparse.Namespace) -> int:
     console = Console()
     project_root = find_project_root()
+
+    if getattr(args, "backfill_crowding", False):
+        if (args.as_of is None or args.question or args.resume or args.brief_source or args.with_crowding
+                or args.previous_brief):
+            console.print("--backfill-crowding requires --as-of; use --compare-brief, not daily-brief options or a research question.")
+            return 2
+        from momentum_research_agent.crowding_history import run
+        output = args.session_dir or reports_root(project_root) / f"backfill_{new_session_id()}"
+        console.print("Historical issuer backfill: exact dates only; up to 120s download budget; 0 LLM requests.")
+        try:
+            result = await asyncio.to_thread(run, args.as_of, output, args.issuer_files, args.compare_brief)
+        except (OSError, ValueError) as exc:
+            console.print(f"Cannot create backfill ({type(exc).__name__}); check date and use a new writable directory.")
+            return 2
+        console.print(f"Backfill: {result['status']}; comparison: {result['comparison']['status']}. Output: {output.resolve() / 'backfill.md'}")
+        return 2 if result["status"] == "unavailable" else 0
+
+    if getattr(args, "issuer_files", None) is not None or getattr(args, "compare_brief", None) is not None:
+        console.print("--issuer-files and --compare-brief require --backfill-crowding.")
+        return 2
 
     if getattr(args, "with_crowding", False) and (
             not getattr(args, "daily_brief", False) or getattr(args, "brief_source", None) != "etf-proxy"):

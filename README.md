@@ -39,6 +39,51 @@ cp .env.example .env
 
 ## Usage
 
+### Market/book daily brief (no LLM)
+
+```bash
+uv run momentum-research-agent --daily-brief --as-of 2026-05-29
+# Optional: compare with an earlier compatible brief
+uv run momentum-research-agent --daily-brief --as-of 2026-05-29 \
+  --previous-brief reports/<earlier-run>/brief.json
+```
+
+This is a deterministic first release of an as-of brief, not a real-time market
+feed or automated trading system. Supply the intended completed-session date
+explicitly; the command never substitutes an older date. It checks processed
+panel coverage before running the existing engine once (90s subprocess limit,
+network disabled, no retries). No DeepSeek key or model requests are needed.
+`MOMENTUM_ENGINE_DIR` selects an existing engine checkout; otherwise the existing
+resolver prefers a sibling `momentum-tail-risk-monitor` checkout, then the bundled
+historical engine. A missing configured engine does not silently fall back.
+
+The new output directory contains `brief.md`, schema-versioned `brief.json`, and,
+when produced, the original `assessment.json` plus the private `engine_run/`
+artifact. Use `--session-dir <new-directory>` to choose its location; existing
+directories are refused. The brief reports engine state, crowding/unwind scores,
+missing metrics, panel dates/hashes, source-field references, and delivery checks.
+Each score is a monitoring score, **not a crash probability**; a normal DM state
+does not establish low overall risk. The engine's book is not your own portfolio.
+
+- Exit **0 / partial**: an engine assessment is available, with explicit research
+  limitations. Cached dates do not prove publication-time/PIT correctness or
+  complete constituent coverage. The bundled universe also has a later vintage
+  than some historical assessments; this is not a bias-free backtest.
+- Exit **2 / unavailable**: required dates/files are missing, execution fails,
+  delivery/score validation fails, or inputs change during execution. Metrics are
+  withheld and a diagnostic brief is retained when the output location is writable.
+- Comparison is opt-in, reads the earlier source artifact, validates its hash,
+  and requires an earlier date in the same holdings month, the same engine code,
+  score formula, holdings and universe hashes. Incompatible comparisons are
+  withheld, not treated as zero change. Deltas describe engine output changes,
+  not predictive performance or causal attribution.
+
+The bundled panels cannot support a current daily feed. Refreshing the engine's
+processed inputs and adding publication-time/coverage validation is the next
+operational dependency. This command does not fetch data, schedule runs, invoke
+free-form agents, or activate self-improvement policies. Existing research and
+shadow-evaluation commands are unchanged.
+
 ```bash
 uv run momentum-research-agent "Is the recent NVDA selloff a momentum crash signal or a healthy rotation?"
 

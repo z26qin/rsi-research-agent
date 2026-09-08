@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import math
 import sys
+from datetime import date
 from pathlib import Path
 
 from rich.console import Console
@@ -71,6 +72,16 @@ def _positive_float(value: str) -> float:
     return parsed
 
 
+def _as_of_date(value: str) -> date:
+    try:
+        parsed = date.fromisoformat(value)
+        if parsed.isoformat() != value:
+            raise ValueError
+        return parsed
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a date in YYYY-MM-DD format") from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="momentum-research-agent",
@@ -115,6 +126,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show full tool-call details.",
     )
     commands = parser.add_mutually_exclusive_group()
+    commands.add_argument("--daily-brief", action="store_true",
+                          help="Write an as-of market/book brief from cached engine inputs (no LLM).")
+    parser.add_argument("--as-of", type=_as_of_date,
+                        help="Required with --daily-brief: explicit completed-session date YYYY-MM-DD.")
+    parser.add_argument("--previous-brief", type=Path,
+                        help="Optional earlier brief.json to compare with --daily-brief.")
     commands.add_argument(
         "--eval",
         action="store_true",
@@ -283,6 +300,27 @@ async def run_single(
 async def async_main(args: argparse.Namespace) -> int:
     console = Console()
     project_root = find_project_root()
+
+    if getattr(args, "daily_brief", False):
+        if args.as_of is None or args.question or args.resume:
+            console.print("--daily-brief requires --as-of and cannot take a question or --resume.")
+            return 2
+        from momentum_research_agent.daily_brief import run_daily_brief
+        load_env(project_root)  # Only configuration; no client or key required.
+        output = args.session_dir or reports_root(project_root) / f"brief_{new_session_id()}"
+        console.print("Checking input coverage; at most one 90s offline engine run; 0 LLM requests.")
+        try:
+            brief = await asyncio.to_thread(run_daily_brief, project_root, args.as_of, output,
+                                            args.previous_brief)
+        except OSError as exc:
+            console.print(f"Cannot create brief output ({type(exc).__name__}); use a new writable directory.")
+            return 2
+        console.print(f"Daily brief: {brief.status}. Output: {output.resolve() / 'brief.md'}")
+        return 2 if brief.status == "unavailable" else 0
+
+    if getattr(args, "as_of", None) is not None or getattr(args, "previous_brief", None) is not None:
+        console.print("--as-of and --previous-brief require --daily-brief.")
+        return 2
 
     if getattr(args, "import_session", None) is not None:
         session_dir = args.import_session.expanduser().resolve()

@@ -47,7 +47,9 @@ QUESTION = (
     "Use engine_query(ticker='SPY', end='2026-05-29') to assess momentum tail risk "
     "as of that historical date. Separate market-level regime evidence from "
     "ticker-specific crowding/unwind evidence. Cite only observed facts and "
-    "explicitly identify what the engine cannot establish."
+    "explicitly identify what the engine cannot establish. "
+    "Keep the final ResearchReport compact: at most 5 findings, short excerpts, "
+    "and a brief summary. Preserve the required JSON fields and important caveats."
 )
 
 
@@ -91,11 +93,15 @@ class BoundedClient:
         save(self.folder / "state.json", self.state)  # Reserve before sending, even on failure.
         kwargs["max_tokens"] = min(kwargs.get("max_tokens", 2048), 2048)
         kwargs["timeout"] = min(kwargs.get("timeout", 40), 40)
+        # The native tool loop does not carry thinking-mode reasoning_content.
+        # Apply the same explicit mode to capture, reflection, and both shadows.
+        kwargs["extra_body"] = {**(kwargs.get("extra_body") or {}), "thinking": {"type": "disabled"}}
         response = await asyncio.wait_for(self.raw.chat.completions.create(**kwargs), 40)
         choice = response.choices[0] if response.choices else None
         message = getattr(choice, "message", None)
         save(self.folder / "responses" / f"{self.state['attempts']}.json", {
             "model": getattr(response, "model", None),
+            "thinking": "disabled",
             "finish_reason": getattr(choice, "finish_reason", None),
             "content": getattr(message, "content", None),
         })  # Preserve incomplete output too, without request headers or provider errors.

@@ -122,6 +122,7 @@ async def test_full_shadow_preserves_active_and_cannot_repeat(tmp_path):
     assert state["status"] == "shadow_complete", state
     assert state["attempts"] == 15
     assert state["promoted"] is False
+    assert all(call["extra_body"]["thinking"] == {"type": "disabled"} for call in raw.calls)
     reflection_input = raw.calls[4]["messages"][1]["content"]
     assert "allowed_report_statuses" in reflection_input
     assert "failed_baseline_report" in reflection_input
@@ -186,6 +187,8 @@ async def test_capture_real_engine_with_fake_llm(tmp_path, monkeypatch):
     assert state["attempts"] == 2
     assert (tmp_path / "session" / "traces.jsonl").exists()
     assert not experiment.PolicyStore(tmp_path).active_path.exists()
+    assert all(call["extra_body"]["thinking"] == {"type": "disabled"} for call in raw.calls)
+    assert "Keep the final ResearchReport compact" in raw.calls[0]["messages"][1]["content"]
 
 
 @pytest.mark.asyncio
@@ -261,3 +264,13 @@ async def test_capture_does_not_hide_unrecordable_tool_attempt(tmp_path, monkeyp
     state = await experiment.run(tmp_path, raw)
     assert state["status"] == "unscorable_capture"
     assert experiment.read(tmp_path / "session" / "task_board.json")["tasks"][0]["tool_calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_experiment_forces_non_thinking_without_mutating_extra_body(tmp_path):
+    raw, create = client()
+    extra = {"thinking": {"type": "enabled"}, "other_option": "preserved"}
+    await experiment.BoundedClient(raw, tmp_path, {"attempts": 0}).chat.completions.create(extra_body=extra)
+    assert create.call_args.kwargs["extra_body"] == {
+        "thinking": {"type": "disabled"}, "other_option": "preserved"}
+    assert extra["thinking"] == {"type": "enabled"}

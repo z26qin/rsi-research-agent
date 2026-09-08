@@ -34,6 +34,15 @@ erase them. Incomplete runs and malformed final reports block the task rather
 than becoming research failures for reflection. The engine-directory environment
 setting is restored on exit, including failure.
 
+Thinking is explicitly disabled in every experiment request (capture, preflight,
+reflection, and both comparison variants). This avoids relying on provider
+defaults or a thinking-mode tool protocol that the native loop does not implement.
+The capture assignment requests at most five findings with short excerpts and a
+brief summary; required JSON fields and caveats remain mandatory. The same
+assignment is preserved in imported replay cases. The 2,048-token cap is unchanged;
+truncated output still fails closed. This compatibility fix has offline regression
+coverage, but has not yet been validated with another paid DeepSeek run.
+
 Outputs live under the supplied directory:
 
 - `state.json`: status and cumulative model attempts.

@@ -17,8 +17,9 @@ from pathlib import Path
 
 from momentum_research_agent.agents.audit import static_audit
 from momentum_research_agent.agents.budget import LoopBudget
-from momentum_research_agent.agents.ledger import finalize_ledger
-from momentum_research_agent.agents.sub_agent import SubAgent, load_profile
+from momentum_research_agent.agents.ledger import finalize_ledger, record_trace
+from momentum_research_agent.agents.react_loop import react_loop_detailed
+from momentum_research_agent.agents.sub_agent import _bind_report, _report_instructions, load_profile
 from momentum_research_agent.config import make_client
 from momentum_research_agent.coordinator.task_board import TaskBoard
 from momentum_research_agent.eval.live_compare import (
@@ -32,9 +33,12 @@ from momentum_research_agent.eval.session_cases import import_session_cases
 from momentum_research_agent.state.policies import (
     PolicyPatch, PolicyStore, ResearchPolicy, _version_id, merge_policy_patch, validate_policy,
 )
-from momentum_research_agent.state.reports import persist_verification_report
+from momentum_research_agent.models.schemas import ResearchReport, UsageSummary, parse_model_json
+from momentum_research_agent.state.reports import persist_research_report, persist_verification_report
+from momentum_research_agent.state.traces import append_traces
 from momentum_research_agent.tools import PROFILE_TOOLS
 from momentum_research_agent.tools.engine_pipeline import run_pipeline
+from momentum_research_agent.tools.registry import ToolContext, resolve_tools, set_tool_context
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = "deepseek-v4-flash"
@@ -108,8 +112,19 @@ def prompt_only(patch, profile):
 
 
 async def capture(folder, client, state):
-    # Pin the bundled historical engine explicitly; never silently collect fallback data.
+    previous = os.environ.get("MOMENTUM_ENGINE_DIR")
     os.environ["MOMENTUM_ENGINE_DIR"] = str(ROOT / "fixtures" / "engine")
+    try:
+        await _capture(folder, client, state)
+    finally:
+        if previous is None:
+            os.environ.pop("MOMENTUM_ENGINE_DIR", None)
+        else:
+            os.environ["MOMENTUM_ENGINE_DIR"] = previous
+
+
+async def _capture(folder, client, state):
+    # Pin the bundled historical engine explicitly; never silently collect fallback data.
     engine = await asyncio.to_thread(run_pipeline, "2026-05-29", project_root=ROOT,
                                      engine_root=ROOT / "fixtures" / "engine", offline=True, timeout_s=90)
     if not engine.ok:
@@ -130,18 +145,48 @@ async def capture(folder, client, state):
     board = TaskBoard(session, question=QUESTION)
     task = board.add_task("Historical momentum risk", QUESTION, profile)
     board.activate(task.id)
-    result = await SubAgent(client, MODEL, ROOT, budget=BUDGET, policy=baseline).run(
-        task, ["engine_query"], session)
-    board.record_usage(task.id, tool_calls=result.tool_calls)
-    board.complete(task.id)
+    definitions, registry = resolve_tools(["engine_query"])
+    set_tool_context(ToolContext(project_root=ROOT, session_dir=session))
+    traces, usage = [], UsageSummary()
+    tool_calls = 0
+
+    def on_tool(name, arguments, observation):
+        nonlocal tool_calls
+        tool_calls += 1
+        trace = record_trace(name, arguments, observation, agent_id=task.id, agent_role=profile)
+        if trace is not None:
+            traces.append(trace)
+            append_traces(session, [trace])  # Durable before the next model request.
+        board.record_usage(task.id, tool_calls=tool_calls, tokens_used=usage.total_tokens)
+
+    try:
+        result = await react_loop_detailed(client=client, model=MODEL,
+            system_prompt=load_profile(profile, folder, policy=baseline),
+            user_message=_report_instructions(task), tools=definitions, tool_registry=registry,
+            on_tool_call=on_tool, usage_tracker=usage, budget=BUDGET, temperature=0,
+            max_output_tokens=2048)
+        save(session / "completion.json", {"completed": result.completed, "stop_reason": result.stop_reason})
+        if not result.completed:
+            state["status"] = "unscorable_capture"
+            board.fail(task.id, "Incomplete research run", error_type=result.stop_reason)
+            return
+        report = _bind_report(task, parse_model_json(ResearchReport, result.text))
+        persist_research_report(session, task, report)
+    except (Exception, asyncio.CancelledError) as error:
+        board.fail(task.id, "Capture failed; see response diagnostics", error_type=type(error).__name__)
+        raise
+    finally:
+        board.record_usage(task.id, tool_calls=tool_calls, tokens_used=usage.total_tokens)
     # A successful warm-up does not guarantee the later tool call used that data.
-    if not result.traces or any(trace.truncated or trace.replay.source != "run_mvp"
+    if not traces or tool_calls != len(traces) or any(trace.truncated or trace.replay.source != "run_mvp"
             or trace.replay.as_of != "2026-05-29"
             or json.loads(trace.observation).get("delivery_contract", {}).get("verdict") != "pass"
-            for trace in result.traces):
+            for trace in traces):
         state["status"] = "unscorable_capture"
+        board.fail(task.id, "Missing or invalid historical engine observation")
         return
-    audit = finalize_ledger(static_audit(QUESTION, [result.report]), [result.report], result.traces)
+    board.complete(task.id)
+    audit = finalize_ledger(static_audit(QUESTION, [report]), [report], traces)
     persist_verification_report(session, audit)
     cases = import_session_cases(folder, session)
     save(folder / "captured-cases.json", [case.model_dump(mode="json") for case in cases])
@@ -195,7 +240,7 @@ async def compare(folder, client, state):
         raise ValueError("reviewed target feedback exceeds this small experiment's input bound")
     bundle = FailureBundle(active_policy=baseline, failed_case_ids=[target.case_id],
         case_failures={target.case_id: target_result["assessment"]["violations"] +
-                       ["Return only one prompt_overlays entry for this profile; no templates or tool policies."]},
+                       ["Return only one prompt_overlays entry for this profile, at most 1000 characters; no templates or tool policies."]},
         case_profiles={target.case_id: target.profile}, case_capabilities={target.case_id: target.capability},
         verifier_gaps=[target.failing_evidence],
         recorded_observations={"reviewed_target_feedback": reviewed_feedback,
@@ -216,7 +261,7 @@ async def compare(folder, client, state):
                  comparison=str(path), comparison_reasons=report.reasons, promoted=False)
 
 
-async def run(folder, raw):
+async def run(folder, raw=None):
     with locked(folder):
         path = folder / "state.json"
         state = read(path) if path.exists() else {"attempts": 0, "status": "new", "promoted": False}
@@ -226,14 +271,24 @@ async def run(folder, raw):
                 (folder / "reviewed-cases.json").exists() and (folder / "expectations.json").exists()):
             return state
         phase = capture if state["status"] == "new" else compare
+        starting_attempts = state["attempts"]
+        owns_client = raw is None
+        state.pop("error_type", None)
         state["status"] = "running"  # Crash is fail-closed; never silently retry reflection.
         save(path, state)
         try:
+            if raw is None:
+                raw = make_client()
             await phase(folder, BoundedClient(raw, folder, state), state)
         except Exception as error:
-            state.update(status="error", error_type=type(error).__name__)  # No provider/key text.
+            # A review-file typo before any request is safe to correct in place.
+            retryable_review = phase is compare and state["attempts"] == starting_attempts
+            state.update(status="review_required" if retryable_review else "error",
+                         error_type=type(error).__name__)  # No provider/key text.
         finally:
             save(path, state)
+            if owns_client and raw is not None:
+                await raw.close()
         return state
 
 
@@ -241,7 +296,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("experiment_dir", type=Path)
     args = parser.parse_args()
-    state = asyncio.run(run(args.experiment_dir.resolve(), make_client()))
+    state = asyncio.run(run(args.experiment_dir.resolve()))
     print(json.dumps(state, indent=2))
     return 1 if state["status"] in {"error", "running", "shadow_failed", "unscorable", "unscorable_capture"} else 0
 

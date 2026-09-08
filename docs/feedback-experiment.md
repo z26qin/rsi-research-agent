@@ -1,9 +1,15 @@
 # Lightweight feedback experiment
 
-One standalone script reuses the existing analyst, static audit, session importer,
+One standalone script reuses the existing analyst profile and detailed ReAct loop, static audit, session importer,
 schema-validated reflection, and stored-observation comparison. It does not change
 the normal agent loop. There is no promotion, deployment, background loop, or new
 data adapter.
+
+Its added value over `--live-compare` is orchestration: capture a fresh historical
+trajectory, pause for human review, reproduce the target failure and passing
+guard, generate one constrained candidate, then compare it—all under one
+persisted allowance. `--live-compare` alone requires cases and both policies to
+be supplied. This script is experiment tooling, not evidence of a better agent.
 
 ## Capture
 
@@ -23,6 +29,10 @@ The script pins `deepseek-v4-flash`, the bundled historical engine, and the
 empty baseline when no active policy exists. Only `engine_query` is exposed.
 No new data-service API key is required. This is historical research, not current
 market coverage. Trace truncation, fallback data, or missing calls stop capture.
+Tool observations are persisted immediately, so a later provider error cannot
+erase them. Incomplete runs and malformed final reports block the task rather
+than becoming research failures for reflection. The engine-directory environment
+setting is restored on exit, including failure.
 
 Outputs live under the supplied directory:
 
@@ -80,6 +90,10 @@ inspect its artifacts before deciding what to do. Do not delete state or make
 new directories to bypass the agreed budget. Provider errors are recorded by
 type only, without provider messages or credentials. Actual model calls require
 the user's authorization; unit tests use fake LLM responses and real local logic.
+Review-file validation failures before any new model request remain
+`review_required`: correct the files and rerun without resetting the counter.
+Once model execution has started, failed runs are not automatically retried.
+Inspecting terminal state or waiting for missing review files needs no API key.
 
 ## First live attempt (2026-09-08)
 

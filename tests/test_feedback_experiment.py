@@ -125,6 +125,7 @@ async def test_full_shadow_preserves_active_and_cannot_repeat(tmp_path):
     reflection_input = raw.calls[4]["messages"][1]["content"]
     assert "allowed_report_statuses" in reflection_input
     assert "failed_baseline_report" in reflection_input
+    assert "1000 characters" in reflection_input
     assert guard.case_id not in reflection_input
     assert experiment.PolicyStore(tmp_path).active_path.read_bytes() == active
     assert not (tmp_path / "reports" / "gap_ledger.jsonl").exists()
@@ -151,7 +152,7 @@ async def test_stops_without_promotion(tmp_path, mode):
         experiment.save(tmp_path / "expectations.json", data)
     raw = FakeClient(replies)
     state = await experiment.run(tmp_path, raw)
-    assert state["status"] in {"error", "unscorable", "target_not_reproduced_or_guard_failed"}
+    assert state["status"] in {"error", "review_required", "unscorable", "target_not_reproduced_or_guard_failed"}
     assert state["attempts"] <= 20
     assert not (tmp_path / "candidate.json").exists()
     if mode in {"bad_hash", "budget"}:
@@ -167,7 +168,7 @@ async def test_waits_for_human_and_sanitizes_error(tmp_path):
     experiment.save(tmp_path / "reviewed-cases.json", [])
     experiment.save(tmp_path / "expectations.json", {"private": "secret"})
     state = await experiment.run(tmp_path, raw)
-    assert state["status"] == "error"
+    assert state["status"] == "review_required"
     assert "secret" not in (tmp_path / "state.json").read_text()
 
 
@@ -197,3 +198,66 @@ async def test_budget_exhaustion_inside_comparison_is_not_completion(tmp_path):
     state = await experiment.run(tmp_path, raw)
     assert state["status"] == "shadow_failed"
     assert state["attempts"] == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["truncated", "provider_error", "turn_limit"])
+async def test_failed_capture_keeps_trace_and_blocks_task(tmp_path, monkeypatch, ending):
+    """A failed final request must not erase already collected engine evidence."""
+    from test_replay_runner import FakeClient
+    monkeypatch.delenv("MOMENTUM_DISABLE_PIPELINE", raising=False)
+    monkeypatch.setenv("MOMENTUM_ENGINE_DIR", "original-user-setting")
+    tool = response(tool=("engine_query", {"ticker": "SPY", "end": "2026-05-29"}))
+    final = response(report())
+    final.choices[0].finish_reason = "length"
+    raw = FakeClient([tool, final] if ending == "truncated" else [tool] * 3 if ending == "turn_limit" else [tool])
+    state = await experiment.run(tmp_path, raw)
+    assert state["status"] in {"error", "unscorable_capture"}
+    assert (tmp_path / "session" / "traces.jsonl").is_file()
+    board = experiment.read(tmp_path / "session" / "task_board.json")
+    assert board["tasks"][0]["status"] == "BLOCKED"
+    assert board["tasks"][0]["tool_calls"] >= 1
+    assert not (tmp_path / "captured-cases.json").exists()
+    import os
+    assert os.environ["MOMENTUM_ENGINE_DIR"] == "original-user-setting"
+
+
+@pytest.mark.asyncio
+async def test_review_typo_can_be_corrected_without_resetting_budget(tmp_path):
+    from test_replay_runner import FakeClient
+    target, guard = prepared(tmp_path)
+    valid = (tmp_path / "expectations.json").read_text()
+    experiment.save(tmp_path / "expectations.json", {"expectations": []})
+    raw = FakeClient(replay_responses(target, True) + replay_responses(guard, True))
+    state = await experiment.run(tmp_path, raw)
+    assert state["status"] == "review_required"
+    assert state["attempts"] == 2
+    (tmp_path / "expectations.json").write_text(valid)
+    state = await experiment.run(tmp_path, raw)
+    assert state["status"] == "target_not_reproduced_or_guard_failed"
+    assert state["attempts"] == 6
+
+
+def test_terminal_cli_needs_no_api_key(tmp_path):
+    import os
+    import subprocess
+    import sys
+    experiment.save(tmp_path / "state.json", {"status": "error", "attempts": 3})
+    env = {k: v for k, v in os.environ.items() if k != "DEEPSEEK_API_KEY"}
+    proc = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path)],
+        env=env, capture_output=True, text=True)
+    assert proc.returncode == 1
+    assert json.loads(proc.stdout)["attempts"] == 3
+    assert "Traceback" not in proc.stderr
+
+
+@pytest.mark.asyncio
+async def test_capture_does_not_hide_unrecordable_tool_attempt(tmp_path, monkeypatch):
+    from test_replay_runner import FakeClient
+    monkeypatch.delenv("MOMENTUM_DISABLE_PIPELINE", raising=False)
+    raw = FakeClient([
+        response(tool=("engine_query", {"ticker": "SPY", "end": "2026-05-29"})),
+        response(tool=("shell", {"command": "not allowed"})), response(report())])
+    state = await experiment.run(tmp_path, raw)
+    assert state["status"] == "unscorable_capture"
+    assert experiment.read(tmp_path / "session" / "task_board.json")["tasks"][0]["tool_calls"] == 2

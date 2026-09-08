@@ -41,6 +41,19 @@ cp .env.example .env
 
 ### Market/book daily brief (no LLM)
 
+For a latest-data **personal ETF momentum proxy** (MTUM versus SPY, optional VIX):
+
+```bash
+uv run momentum-research-agent --daily-brief --brief-source etf-proxy
+```
+
+This fetches public data for the previous New York trading session, snapshots
+the inputs, and computes returns, relative performance, drawdown and volatility.
+No key or LLM is used. It is not the original engine or a crash-probability model.
+See [ETF proxy usage, data checks and offline replay](docs/etf-proxy-brief.md).
+
+The original **engine** workflow remains the default:
+
 ```bash
 uv run momentum-research-agent --daily-brief --as-of 2026-05-29
 # Optional: compare with an earlier compatible brief

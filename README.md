@@ -267,3 +267,7 @@ uv run pytest
 See `AGENTS.md` for how to add tools, profiles, and prompts without touching orchestration code.
 
 An example compiled ledger (engine snapshot + search observation + open gaps) lives in `examples/nvda_momentum_gap_ledger.json`.
+
+## Research workspace
+
+The optional [frontend workspace](frontend/README.md) provides a read-only artifact reader, browser-only Demo scenarios, and a separate opt-in local execution service. The Runs page supports confirmed research requests and 08:00 Toronto Daily Brief scheduling through the existing CLI. Sync and builds remain read-only; only the execution service launches backend writes. See its README for startup, safety boundaries, and private build modes.

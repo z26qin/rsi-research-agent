@@ -1,0 +1,48 @@
+{
+  "name": "frontend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "control:start": "uv run --project .. python scripts/control_service.py",
+    "sync:artifacts": "python3 scripts/artifact_watch.py --once",
+    "predev": "npm run sync:artifacts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "build": "node scripts/build_artifacts.mjs && node scripts/prepare-sites-build.mjs",
+    "build:local": "node scripts/build_artifacts.mjs --local && node scripts/prepare-sites-build.mjs",
+    "preview": "vite preview",
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:control-proxy": "node --test tests/control-proxy.test.mjs",
+    "test:build-artifacts": "node --test tests/build-artifacts.test.mjs"
+  },
+  "dependencies": {
+    "@fontsource/instrument-serif": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.102.8",
+    "@vitejs/plugin-react": "5.0.4",
+    "lucide-react": "^1.43.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-router-dom": "^7.18.3",
+    "tailwindcss": "^4.3.3",
+    "vite": "6.4.2",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^26.5.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitest/coverage-v8": "^5.0.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

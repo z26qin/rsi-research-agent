@@ -70,6 +70,20 @@ def test_corrupt_snapshot_rejected_and_no_overwrite(provider, tmp_path):
         brief.replay_snapshot(output)
 
 
+def test_control_rejects_old_snapshot_relabelled_as_current(provider, tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'frontend/scripts'))
+    from proxy_control_worker import validate_proxy
+    output = tmp_path / 'run'
+    brief.run_proxy_brief(date(2026, 9, 4), output)
+    payload = json.loads((output / 'brief.json').read_text())
+    payload['requested_as_of'] = '2026-09-08'
+    (output / 'brief.json').write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match='Snapshot target'):
+        validate_proxy(output, '2026-09-08')
+
+
 def test_different_report_type_cannot_be_compared(provider, tmp_path):
     previous = tmp_path / "old.json"
     previous.write_text('{"schema_version":"daily_brief_v1"}')

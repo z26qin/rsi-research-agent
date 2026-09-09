@@ -43,7 +43,13 @@ def load_env(project_root: Path | None = None) -> None:
         return
     root = project_root or find_project_root()
     load_dotenv(root / ".env")
+    if shared := os.environ.get("MOMENTUM_ENV_FILE"):
+        load_dotenv(Path(shared).expanduser())
     load_dotenv()
+
+
+def deepseek_api_key() -> str | None:
+    return os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DeepSeekAPI")
 
 
 def sub_agent_model() -> str:
@@ -55,7 +61,7 @@ def coordinator_model() -> str:
 
 
 def make_client() -> AsyncOpenAI:
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_key = deepseek_api_key()
     if not api_key:
         raise RuntimeError(
             "DEEPSEEK_API_KEY is not set. Copy .env.example to .env and add your key."

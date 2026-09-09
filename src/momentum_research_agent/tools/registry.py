@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from momentum_research_agent.models.schemas import UsageSummary
 
 
 @dataclass
@@ -18,6 +19,11 @@ class ToolContext:
     session_dir: Path | None = None
     console: Console | None = None
     verbose: bool = False
+    client: Any = None
+    usage: UsageSummary | None = None
+    search_requests: int = 0
+    agent_id: str | None = None
+    agent_role: str | None = None
 
 
 @dataclass

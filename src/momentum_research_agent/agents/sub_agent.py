@@ -164,16 +164,20 @@ class SubAgent:
         session_dir = Path(session_dir)
         tool_names = authorize_research_tools(task.profile, tools)
         definitions, registry = resolve_tools(tool_names)
+        local_usage = UsageSummary()
         set_tool_context(
             ToolContext(
                 project_root=self.project_root,
                 session_dir=session_dir,
                 console=self.console,
                 verbose=self.verbose,
+                client=self.client,
+                usage=local_usage,
+                agent_id=task.id,
+                agent_role=task.profile,
             )
         )
 
-        local_usage = UsageSummary()
         tool_calls = 0
         traces: list[ToolTrace] = []
 

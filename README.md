@@ -246,6 +246,16 @@ IDs; `--no-brief-llm` needs no key. Original engine/proxy modes are unchanged.
 See [methodology, offline replay and daily workflow](docs/market-research-brief.md).
 No automatic scheduler or policy promotion is added.
 
+After the brief is saved, a material price/volatility alert or newly lost evidence
+can trigger one bounded analyst + verifier supplement (at most five extra model
+requests, once per target date). `--no-brief-research` skips it;
+`--no-brief-llm` disables both model stages. Failures enter the existing gap ledger
+for separately curated improvement, without blocking or rewriting the brief.
+
+`web_search` can use DeepSeek's native Messages search with the same key, without
+Tavily/Serper. Set `MOMENTUM_ENV_FILE` to your existing local `.env`; the
+`DeepSeekAPI` alias is accepted. [Native-search setup, evidence and limits](docs/native-search.md).
+
 ## Tests
 
 ```bash
@@ -257,3 +267,7 @@ uv run pytest
 See `AGENTS.md` for how to add tools, profiles, and prompts without touching orchestration code.
 
 An example compiled ledger (engine snapshot + search observation + open gaps) lives in `examples/nvda_momentum_gap_ledger.json`.
+
+## Research workspace
+
+The optional [frontend workspace](frontend/README.md) provides a read-only artifact reader, browser-only Demo scenarios, and a separate opt-in local execution service. The Runs page supports confirmed research requests and 08:00 Toronto Daily Brief scheduling through the existing CLI. Sync and builds remain read-only; only the execution service launches backend writes. See its README for startup, safety boundaries, and private build modes.

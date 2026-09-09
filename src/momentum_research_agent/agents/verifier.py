@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
-from momentum_research_agent.agents.audit import merge_verification, static_audit
+from momentum_research_agent.agents.audit import merge_verification, rollup_status, static_audit
 from momentum_research_agent.agents.budget import LoopBudget
 from momentum_research_agent.agents.ledger import finalize_ledger, record_trace
 from momentum_research_agent.agents.react_loop import react_loop
@@ -20,6 +21,7 @@ from momentum_research_agent.models.schemas import (
     UsageSummary,
     VerificationReport,
     VerificationRunResult,
+    VerificationStatus,
     parse_model_json,
 )
 from momentum_research_agent.state.reports import persist_verification_report
@@ -32,6 +34,43 @@ from momentum_research_agent.tools.registry import (
 )
 
 VERIFIER_PROFILE = "verifier"
+
+
+def _guard_source_discovery(report: VerificationReport, reports: list[ResearchReport], traces: list[ToolTrace]) -> None:
+    """URL-only native retrieval cannot substantiate web claims or close their gaps."""
+    discovered_urls: set[str] = set()
+    for trace in traces:
+        if trace.tool != "web_search":
+            continue
+        try:
+            observation = json.loads(trace.observation)
+        except (ValueError, TypeError):
+            continue
+        if (isinstance(observation, dict) and observation.get("provider") == "deepseek_native"
+                and observation.get("evidence_kind") == "source_discovery" and observation.get("status") == "ok"):
+            for source in observation.get("sources", []):
+                if isinstance(source, dict) and isinstance(source.get("url"), str):
+                    discovered_urls.add(source["url"].split("#", 1)[0].rstrip("/"))
+    if not discovered_urls:
+        return
+    web_ids = {item.id for research in reports for item in research.findings
+               if (item.source_url or "").split("#", 1)[0].rstrip("/") in discovered_urls}
+    changed = False
+    for verdict in report.verdicts:
+        source = (verdict.rechecked_source or "").split("#", 1)[0].rstrip("/")
+        if verdict.status is VerificationStatus.VERIFIED and (
+            verdict.evidence_id in web_ids or source in discovered_urls or source == "web_search"
+        ):
+            verdict.status = VerificationStatus.UNCHECKED
+            issue = "Native search supplied source leads, not independently checked page content."
+            verdict.issues.append(issue)
+            verdict.notes = f"{verdict.notes} {issue}".strip()
+            if verdict.claim not in report.unsupported_claims:
+                report.unsupported_claims.append(verdict.claim)
+            changed = True
+    if changed:
+        report.overall_status = rollup_status(report.verdicts, report.missing_evidence)
+        report.summary += " Web claims based on native source discovery remain unchecked."
 
 
 def _instructions(question: str, reports: list[ResearchReport], static: VerificationReport) -> str:
@@ -102,10 +141,12 @@ class Verifier:
         def _persist(report: VerificationReport) -> VerificationReport:
             if traces:
                 append_traces(session_dir, traces)
+            all_traces = [*load_traces(session_dir), *traces]
+            _guard_source_discovery(report, reports, all_traces)
             compiled = finalize_ledger(
                 report,
                 reports,
-                [*load_traces(session_dir), *traces],
+                all_traces,
             )
             persist_verification_report(session_dir, compiled)
             return compiled
@@ -122,6 +163,10 @@ class Verifier:
                 session_dir=session_dir,
                 console=self.console,
                 verbose=self.verbose,
+                client=self.client,
+                usage=local_usage,
+                agent_id="verifier",
+                agent_role="verifier",
             )
         )
 

@@ -1,4 +1,4 @@
-"""Web search via Serper, falling back to Tavily."""
+"""Web search: native DeepSeek by default when configured; optional legacy providers."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import os
 from typing import Any
 
 import httpx
+
+from momentum_research_agent.config import deepseek_api_key
 
 from momentum_research_agent.tools.registry import register_tool
 
@@ -81,6 +83,12 @@ async def _tavily_search(query: str) -> str:
     },
 )
 async def web_search(query: str) -> str:
+    provider = os.environ.get("WEB_SEARCH_PROVIDER", "auto")
+    if provider not in {"auto", "deepseek", "legacy"}:
+        return "web_search unavailable: invalid WEB_SEARCH_PROVIDER"
+    if provider == "deepseek" or (provider == "auto" and deepseek_api_key()):
+        from momentum_research_agent.tools.deepseek_search import search
+        return await search(query)
     if os.environ.get("SERPER_API_KEY"):
         try:
             return await _serper_search(query)

@@ -94,7 +94,7 @@ that separate cash-dividend valuation problem.
 ## Bounded LLM and deterministic fallback
 
 Data and all five answers are recomputed deterministically from checked evidence.
-The existing native ReAct loop makes **at most one request**, with no tools,
+The brief-focus stage uses the existing native ReAct loop for **at most one request**, with no tools,
 25-second request timeout, 512 output tokens and SDK retries disabled. It can
 select one to three existing answer IDs to prioritize; it cannot add free-form
 claims, prices, trades, scores or policy patches. This is intentionally a small
@@ -106,11 +106,77 @@ as command-line arguments or check them in. Without a key, on timeout, malformed
 JSON or an unknown/duplicate ID, the deterministic brief still completes and
 labels the model fallback. Use `--no-brief-llm` for an explicit zero-request run.
 The model response, accepted IDs, request count and usage are stored separately
-from the facts. No active policy, gap ledger, engine code or verifier is changed.
+from the facts. This focus stage does not change active policy, the gap ledger,
+engine code or verification.
 
 Existing plain `--daily-brief` / `--with-crowding` retain zero LLM requests and
 their current artifacts. Engine remains the default source and still requires
 an explicit date. This feature is opt-in through `--with-market-research`.
+
+## Fast brief, optional research, independent improvement
+
+The CLI saves and prints the daily brief path **before** optional supplemental
+research. The supplement never edits the published brief or changes its exit
+status. This is not a detached background service: the CLI still waits for the
+bounded supplement, while the saved brief is already readable.
+
+Version `brief_research_v1` selects at most one operational alert, in priority order:
+
+1. Absolute MTUM adjusted daily return at least 3%.
+2. MTUM 21-day annualized volatility rises at least 5 percentage points **and**
+   50% relative to the previous session, recomputed from the current price vintage.
+3. Previously available MTUM short-interest positions or current issuer holdings
+   become missing/stale. This requires a valid earlier market sidecar via
+   `--previous-brief`; without it, a newly lost source cannot be established.
+
+These are simple investigation heuristics, not calibrated crowding/risk signals.
+Permanent limitations such as missing borrow fees/float do not trigger repeated
+research. Missing core prices do not launch an LLM to repair missing data.
+
+An alert reuses one existing technicals/flow analyst and the independent verifier.
+Only `web_search` and `file_reader` are exposed; prices come from the checked
+brief, not a second vendor download or historical-engine run. Web search now
+uses DeepSeek native search when the existing DeepSeek key is configured; no
+Tavily/Serper key is needed on that path. See [native search](native-search.md)
+for key loading, archived evidence and billing limitations. Without adequate
+evidence, the supplement must remain unresolved.
+
+The analyst has three turns/35 seconds; verification has two turns/25 seconds.
+Together they get at most **five additional LLM requests**, 2048 output tokens
+per request, no SDK retries, 15-second request and 8-second tool timeouts, within
+a 60-second research deadline. Native search requests count toward the same
+five-request limit, not as free tool calls. Local replay/disk work and client cleanup are
+additional. Including brief focus, a run uses at most six requests. Quiet days
+use no supplemental requests. `--no-brief-research` skips the supplement;
+`--no-brief-llm` disables both model stages.
+
+An analyst search plus final answer and a verifier search plus final verdict can
+need six requests, which exceeds this deliberately retained five-request budget.
+The run must then remain incomplete; the integration does not silently increase
+the budget to obtain a passing verdict.
+
+An atomic `reports/brief_research/YYYY-MM-DD` directory permits only one attempt
+per target date/project, including failed or interrupted attempts. There is no
+automatic retry or stale-claim reclamation. Use an explicit research session for
+a deliberate follow-up. `research_status.json` and `research_addendum.md` sit
+beside the brief; the research session stores checked context, task board, pinned
+policy, analyst report, tool traces and verification. A missing terminal model
+response or failed re-check cannot publish static-only claims as verified.
+
+Research pins the existing active policy; the verifier never loads its overlay.
+Failures feed the existing gap ledger. Nothing automatically runs `--improve`,
+changes active policy or modifies Python/tool code. Curate representative failed
+sessions separately, for example:
+
+```bash
+uv run momentum-research-agent --import-session reports/brief_research/YYYY-MM-DD
+```
+
+Imported cases remain pending, not trusted expected answers. Unsupported/missing
+traces may be non-replayable. Import does not silently add cases to the frozen
+`--improve` evaluation suite. Independent improvement still requires the existing
+target-fix/no-regression gate before promotion, affecting future research only,
+not today's brief or its deterministic trigger thresholds.
 
 ## Evidence and offline verification
 
@@ -143,10 +209,19 @@ introduced. Start with manual runs and assess reliability over five sessions.
 
 ## September 8, 2026 acceptance
 
-The reviewed end-to-end run completed in 6.20 seconds with target September 4,
+Before the alert bridge was added, the reviewed end-to-end run completed in
+6.20 seconds with target September 4,
 reference May 29, all 125 current equity constituents covered (99.79% of fund
 weight), FINRA version `finra_short_interest_v2_zero_volume`, and exactly one
 successful model request. Offline source replay reproduced all deterministic
 facts, short-interest results and answers exactly. Public files, credentials
 and generated research reports are not committed. This single successful run
 does not establish ongoing availability or an SLA.
+
+The alert bridge was separately checked offline against a copy of that real
+snapshot: MTUM daily return was +1.8168%, no eligible alert was selected, and
+there were zero supplemental model requests. All four original brief files
+retained their hashes and deterministic replay matched exactly. Triggered
+research, failed verification, exhaustion and trace retention are exercised with
+recorded/simulated responses; no live supplemental investigation is claimed by
+this acceptance check.

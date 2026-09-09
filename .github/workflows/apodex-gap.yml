@@ -17,6 +17,20 @@ jobs:
         run: uv sync --group dev
       - name: Tests
         run: uv run pytest
+      - name: Build wheel and verify packaged research resources
+        run: |
+          uv build --wheel
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          names = ZipFile(next(Path("dist").glob("*.whl"))).namelist()
+          for path in (
+              "coordinator/prompts/market_focus.md",
+              "agents/profiles/credit_analyst.md",
+              "eval/fixtures/trajectory_cases.json",
+          ):
+              assert f"momentum_research_agent/{path}" in names, path
+          PY
       - name: Probe this HEAD
         run: python3 scripts/probe_apodex_gap.py HEAD
       - name: Probe origin/main

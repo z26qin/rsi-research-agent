@@ -41,6 +41,41 @@ cp .env.example .env
 
 ### Market/book daily brief (no LLM)
 
+For a latest-data **personal ETF momentum proxy** (MTUM versus SPY, optional VIX):
+
+```bash
+uv run momentum-research-agent --daily-brief --brief-source etf-proxy
+```
+
+This fetches public data for the previous New York trading session, snapshots
+the inputs, and computes returns, relative performance, drawdown and volatility.
+No key or LLM is used. It is not the original engine or a crash-probability model.
+See [ETF proxy usage, data checks and offline replay](docs/etf-proxy-brief.md).
+
+Add optional issuer flows, concentration and cross-fund holdings overlap:
+
+```bash
+uv run momentum-research-agent --daily-brief --brief-source etf-proxy --with-crowding
+```
+
+This adds MTUM/QUAL/IVV issuer snapshots and partial crowding evidence, not a
+crowding score. MTUM net creations require a compatible preceding-session brief
+supplied with `--previous-brief`; the first run reports unavailable flows.
+See [definitions, limitations and offline replay](docs/crowding-indicators.md).
+
+For historical holdings, use `--backfill-crowding --as-of YYYY-MM-DD` and optionally
+`--compare-brief <newer-brief.json>`. Exact-date issuer downloads are best effort;
+`--issuer-files <import.json>` supports offline original-file imports when the
+historical route is unavailable. See [historical data preparation](docs/historical-crowding.md).
+
+For a **hypothetical fixed-basket** alternative (not historical holdings), run
+`--simulate-basket --basket-brief <saved ETF brief.json> --start-date 2026-05-29`.
+It applies that later MTUM basket's weights at the starting close, holds positions
+without rebalancing, and compares cash-dividend returns and price-driven
+concentration. Look-ahead bias is explicit. See [fixed-basket comparison](docs/fixed-basket.md).
+
+The original **engine** workflow remains the default:
+
 ```bash
 uv run momentum-research-agent --daily-brief --as-of 2026-05-29
 # Optional: compare with an earlier compatible brief
@@ -195,6 +230,21 @@ Cost estimates use published USD / 1M-token rates (cache-hit and peak/off-peak i
 | deepseek-v4-pro | $0.66 | $1.98 |
 
 See [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing).
+
+## Five-question daily market research
+
+```bash
+uv run momentum-research-agent --daily-brief --brief-source etf-proxy \
+  --with-market-research --reference-date 2026-05-29
+```
+
+Writes `market_brief.md/json` answering momentum, concentration, short interest,
+volatility and whether the evidence supports a crowding conclusion. Adds official
+FINRA positions with publication-aware dates and complete-coverage fixed-basket
+DTC. Optional DeepSeek prioritization is one bounded call over verified answer
+IDs; `--no-brief-llm` needs no key. Original engine/proxy modes are unchanged.
+See [methodology, offline replay and daily workflow](docs/market-research-brief.md).
+No automatic scheduler or policy promotion is added.
 
 ## Tests
 

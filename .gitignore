@@ -14,5 +14,11 @@ build/
 htmlcov/
 .DS_Store
 reports/*
+frontend/node_modules/
+frontend/.generated/
+frontend/coverage/
+frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
 !reports/.gitkeep
 fixtures/engine/outputs/pipeline_runs/

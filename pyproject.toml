@@ -5,7 +5,7 @@ description = "Multi-agent investigation system for US equity momentum tail-risk
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "openai>=1.40.0",
+    "openai>=3.8.0",
     "pydantic>=2.0.0",
     "rich>=13.0.0",
     "python-dotenv>=1.0.0",

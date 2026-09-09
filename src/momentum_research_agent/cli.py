@@ -146,11 +146,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--with-crowding", action="store_true",
                         help="Add optional issuer flows, concentration and overlap to ETF proxy mode (no LLM).")
     parser.add_argument("--with-market-research", action="store_true",
-                        help="Answer five daily questions with issuer data, FINRA short interest and at most one LLM call.")
+                        help="Answer five daily questions; one optional focus request, then bounded alert research after publication.")
     parser.add_argument("--reference-date", type=_as_of_date,
                         help="Optional retrospective baseline for --with-market-research (e.g. 2026-05-29).")
     parser.add_argument("--no-brief-llm", action="store_true",
                         help="Use deterministic market-research answers without an API key.")
+    parser.add_argument("--no-brief-research", action="store_true",
+                        help="Disable post-publication alert research; retain the optional brief-focus LLM step.")
     parser.add_argument("--previous-brief", type=Path,
                         help="Optional earlier brief.json to compare with --daily-brief.")
     commands.add_argument(
@@ -324,7 +326,8 @@ async def async_main(args: argparse.Namespace) -> int:
 
     market = getattr(args, "with_market_research", False)
     if (market and (not getattr(args, "daily_brief", False) or args.brief_source != "etf-proxy")) or (
-            not market and (getattr(args, "reference_date", None) is not None or getattr(args, "no_brief_llm", False))):
+            not market and (getattr(args, "reference_date", None) is not None or getattr(args, "no_brief_llm", False)
+                            or getattr(args, "no_brief_research", False))):
         console.print("Market options require --daily-brief --brief-source etf-proxy --with-market-research.")
         return 2
     if market and args.reference_date is not None:
@@ -401,6 +404,16 @@ async def async_main(args: argparse.Namespace) -> int:
                     console.print("Market research: FINRA collection up to an additional 120s; at most one 25s LLM request (optional).")
                     await run(output, args.reference_date, llm=not args.no_brief_llm, previous=args.previous_brief)
                     console.print(f"Market brief: {output.resolve() / 'market_brief.md'}")
+                    from momentum_research_agent.brief_research import run as research_on_alert
+                    console.print("Daily brief saved. Optional alert research follows; at most one task, 5 extra LLM requests, 60s.")
+                    try:
+                        supplement = await research_on_alert(output, project_root, args.previous_brief,
+                            enabled=not (args.no_brief_llm or args.no_brief_research))
+                        console.print(f"Supplement: {supplement.status}. Output: {output.resolve() / 'research_addendum.md'}")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        console.print(f"Optional research failed ({type(exc).__name__}); published daily brief preserved.")
             else:
                 from momentum_research_agent.daily_brief import run_daily_brief
                 console.print("Checking input coverage; at most one 90s offline engine run; 0 LLM requests.")

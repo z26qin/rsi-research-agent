@@ -246,6 +246,16 @@ IDs; `--no-brief-llm` needs no key. Original engine/proxy modes are unchanged.
 See [methodology, offline replay and daily workflow](docs/market-research-brief.md).
 No automatic scheduler or policy promotion is added.
 
+After the brief is saved, a material price/volatility alert or newly lost evidence
+can trigger one bounded analyst + verifier supplement (at most five extra model
+requests, once per target date). `--no-brief-research` skips it;
+`--no-brief-llm` disables both model stages. Failures enter the existing gap ledger
+for separately curated improvement, without blocking or rewriting the brief.
+
+`web_search` can use DeepSeek's native Messages search with the same key, without
+Tavily/Serper. Set `MOMENTUM_ENV_FILE` to your existing local `.env`; the
+`DeepSeekAPI` alias is accepted. [Native-search setup, evidence and limits](docs/native-search.md).
+
 ## Tests
 
 ```bash

@@ -26,6 +26,8 @@ jobs:
           names = ZipFile(next(Path("dist").glob("*.whl"))).namelist()
           for path in (
               "coordinator/prompts/market_focus.md",
+              "coordinator/prompts/brief_research.md",
+              "coordinator/prompts/native_search.md",
               "agents/profiles/credit_analyst.md",
               "eval/fixtures/trajectory_cases.json",
           ):

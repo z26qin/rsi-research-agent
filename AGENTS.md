@@ -87,6 +87,36 @@ Resume loads JSON first. Legacy Markdown-only sessions become a low-confidence `
 
 ## Runtime guarantees
 
+Daily market CLI delivery uses `brief_research.py` only after saving/printing the
+brief. At most one alert task per target date gets a shared five-request/60-second
+research budget, with only web search and local file reading. The CLI waits for
+the optional supplement, but its failure cannot change the published brief or
+core exit status. Require terminal schema-valid analyst/verifier responses;
+static audit alone is not independent verification. Failures enter the existing
+gap ledger, never automatically invoke improvement or promote a policy.
+
+`web_search` defaults to native DeepSeek Messages search when a DeepSeek key is
+configured (`DeepSeekAPI` alias accepted; optional explicit `MOMENTUM_ENV_FILE`).
+Each role permits at most two native request attempts, no SDK retries, requested
+max_tokens=1024/max_uses=1 and a 20-second inner timeout; shorter tool/role deadlines
+still win. Native requests also spend the daily supplement's shared five-request
+budget. Store SDK responses/diagnostics under session `search_results/`, with
+hash pointers and structured source metadata in existing `traces.jsonl`. Interrupted
+native calls persist their trace directly because ReAct skips the callback on
+tool timeout; normal completions use the callback, never a second tool log.
+Per-role native usage joins local UsageSummary. Service-side search continuation
+is not a client-controlled dollar cap. Never switch providers after native failure
+or treat model prose as retrieved evidence. Require end_turn and usable structured
+web_search_result items; retain valid sources even when another action hits its
+limit. Titles/URLs are discovery metadata, not page text or verified claims.
+Cache read/write tokens join local input usage; raw server usage remains archived.
+The search endpoint is fixed to api.deepseek.com/anthropic/v1/messages and never
+follows redirects. Research/chat base URL configuration is unchanged. Verifier stays
+independent; native-discovered URLs cannot become VERIFIED without a future
+URL-to-content evidence binding. A deterministic guard leaves those verdicts
+UNCHECKED before ledger persistence; unrelated failures do not downgrade other
+sources. No search result is automatically VERIFIED.
+
 Each sub-agent run is bounded by `LoopBudget`:
 
 - `max_turns` (default 8)

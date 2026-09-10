@@ -24,6 +24,7 @@ def test_known_profile_resolves_only_allowlist() -> None:
         "market_data",
         "web_search",
         "file_reader",
+        "read_url",
     ]
 
 

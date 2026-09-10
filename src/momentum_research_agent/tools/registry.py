@@ -22,6 +22,7 @@ class ToolContext:
     client: Any = None
     usage: UsageSummary | None = None
     search_requests: int = 0
+    source_reads: int = 0
     agent_id: str | None = None
     agent_role: str | None = None
 

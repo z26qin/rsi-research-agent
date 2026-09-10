@@ -10,8 +10,8 @@ from openai import AsyncOpenAI
 from momentum_research_agent.models.schemas import UsageSummary
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEFAULT_SUB_MODEL = "deepseek-chat"
-DEFAULT_COORDINATOR_MODEL = "deepseek-reasoner"
+DEFAULT_SUB_MODEL = "deepseek-flash"
+DEFAULT_COORDINATOR_MODEL = "deepseek-flash"
 
 # USD per 1M tokens. User-specified chat/reasoner rates plus current V4 list
 # prices (off-peak, cache miss) from https://api-docs.deepseek.com/quick_start/pricing
@@ -20,7 +20,14 @@ PRICE_PER_MILLION: dict[str, tuple[float, float]] = {
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "deepseek-v4-flash": (0.22, 0.66),
+    "deepseek-v4.1-flash": (0.22, 0.66),
+    "deepseek-flash": (0.22, 0.66),
     "deepseek-v4-pro": (0.66, 1.98),
+}
+
+# Compatibility for earlier project configurations; official V4.1 API ID is deepseek-flash.
+MODEL_ALIAS: dict[str, str] = {
+    "deepseek-v4.1-flash": "deepseek-flash",
 }
 
 
@@ -52,12 +59,16 @@ def deepseek_api_key() -> str | None:
     return os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("DeepSeekAPI")
 
 
+def resolve_model_alias(model: str) -> str:
+    return MODEL_ALIAS.get(model, model)
+
+
 def sub_agent_model() -> str:
-    return os.environ.get("SUB_AGENT_MODEL", DEFAULT_SUB_MODEL)
+    return resolve_model_alias(os.environ.get("SUB_AGENT_MODEL", DEFAULT_SUB_MODEL))
 
 
 def coordinator_model() -> str:
-    return os.environ.get("COORDINATOR_MODEL", DEFAULT_COORDINATOR_MODEL)
+    return resolve_model_alias(os.environ.get("COORDINATOR_MODEL", DEFAULT_COORDINATOR_MODEL))
 
 
 def make_client() -> AsyncOpenAI:
@@ -73,7 +84,7 @@ def make_client() -> AsyncOpenAI:
 
 
 def estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    input_rate, output_rate = PRICE_PER_MILLION.get(model, PRICE_PER_MILLION["deepseek-chat"])
+    input_rate, output_rate = PRICE_PER_MILLION.get(model, PRICE_PER_MILLION["deepseek-flash"])
     return (prompt_tokens / 1_000_000) * input_rate + (completion_tokens / 1_000_000) * output_rate
 
 

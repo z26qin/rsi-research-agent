@@ -210,19 +210,19 @@ async def test_real_analyst_and_verifier_keep_discovery_unchecked_and_replayable
     async with sdk(handler) as client:
         analyst = await SubAgent(client, "test", tmp_path).run(Task(title="MTUM", assignment="MTUM", profile="technicals_analyst"), None, tmp_path)
         verified = await Verifier(client, "test", tmp_path).run("MTUM", [analyst.report], tmp_path)
-    assert analyst.usage.total_tokens == verified.usage.total_tokens == 190
-    assert verified.report.verdicts[0].status.value == "unchecked"
-    assert verified.report.overall_status == "pass_with_caveats"
-    assert "MTUM targets momentum" in verified.report.unsupported_claims
-    assert any(gap.evidence_id == "e1" for gap in verified.report.gaps)
+    assert analyst.usage.total_tokens == 190 and verified.usage.total_tokens == 0
+    assert not analyst.report.findings and not verified.report.verdicts
+    assert verified.report.overall_status == 'fail'
+    assert any("MTUM targets momentum" in item for item in analyst.report.limitations)
+    assert verified.report.gaps
     traces = load_traces(tmp_path)
-    assert len(traces) == 2 and {t.agent_role for t in traces} == {"technicals_analyst", "verifier"}
+    assert len(traces) == 1 and {t.agent_role for t in traces} == {"technicals_analyst"}
     assert all(not t.truncated and json.loads(t.observation)["sources"] for t in traces)
     for trace in traces:
         observation = json.loads(trace.observation)
         artifact = tmp_path / observation["artifact"]
         assert hashlib.sha256(artifact.read_bytes()).hexdigest() == observation["sha256"]
-    assert len(list((tmp_path / "search_results").glob("*.json"))) == 2
+    assert len(list((tmp_path / "search_results").glob("*.json"))) == 1
 
 
 async def test_recorded_search_preserves_results_when_second_action_hits_limit(tmp_path, env):
@@ -270,3 +270,25 @@ def test_discovery_guard_does_not_downgrade_unrelated_checked_sources():
         "evidence_kind": "source_discovery", "sources": [{"url": "https://www.ishares.com/mtum#1"}]}))
     _guard_source_discovery(verification, [research], [failed, found])
     assert [v.status.value for v in verification.verdicts] == ["unchecked", "verified"]
+
+
+@pytest.mark.asyncio
+async def test_reader_redirect_claim_cannot_pass_when_independent_recheck_fails(tmp_path):
+    from momentum_research_agent.agents.verifier import Verifier
+    from momentum_research_agent.agents.ledger import record_trace
+    from momentum_research_agent.models.schemas import ResearchReport
+    from momentum_research_agent.state.traces import append_traces
+    from test_react_loop import FakeClient
+    trace = record_trace('read_url', {'url':'https://example.com/fund'}, json.dumps({
+        'status':'ok','evidence_kind':'page_content', 'url':'https://example.com/holdings.csv',
+        'requested_url':'https://example.com/fund', 'text':'AAA 10%',
+        'links':['https://example.com/other.csv']}), agent_role='momentum_analyst')
+    append_traces(tmp_path,[trace])
+    research = ResearchReport(task_id='t',title='Holdings',agent_role='momentum_analyst',summary='AAA 10%',findings=[
+        {'id':'e','claim':'AAA 10%','category':'other','stance':'neutral','source_url':'https://example.com/holdings.csv'}])
+    client = FakeClient([])
+    async def failed(**kwargs): raise ValueError('Independent recheck failed')
+    client.completions.create = failed
+    result = await Verifier(client,'test',tmp_path).run('Holdings?', [research],tmp_path)
+    assert result.report.verdicts[0].status.value == 'unchecked'
+    assert result.report.gaps

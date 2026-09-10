@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,53 @@ from momentum_research_agent.agents.budget import LoopBudget
 from momentum_research_agent.agents.react_loop import react_loop, react_loop_detailed
 from momentum_research_agent.errors import AgentDeadlineExceeded, ToolExecutionTimeout
 from momentum_research_agent.models.schemas import UsageSummary
+
+
+@pytest.mark.asyncio
+async def test_research_finalizes_without_repeating_exhausted_search():
+    calls = []
+    async def search(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({'status': 'unavailable', 'budget_exhausted': True})
+    client = FakeClient([
+        FakeResponse(FakeMessage(tool_calls=[FakeToolCall('a', 'web_search', '{}'), FakeToolCall('b', 'web_search', '{}')])),
+        FakeResponse(FakeMessage(content='{"summary":"Sources unavailable","status":"partial"}')),
+    ])
+    result = await react_loop_detailed(client, 'test', 'sys', 'question',
+        [{'type':'function','function':{'name':'web_search'}}], {'web_search':search},
+        finalize_research=True)
+    assert len(calls) == 1
+    assert result.completed and result.stop_reason == 'budget_finalized'
+    assert client.completions.calls[-1].get('tool_choice') == 'none'
+    assert client.completions.calls[-1]['response_format'] == {'type':'json_object'}
+
+
+@pytest.mark.asyncio
+async def test_research_reserves_last_turn_for_answer_and_rejects_truncated_output():
+    async def ping(): return 'observation'
+    client = FakeClient([
+        FakeResponse(FakeMessage(tool_calls=[FakeToolCall('a','ping','{}')])),
+        FakeResponse(FakeMessage(content='{"summary":"unfinished'), finish_reason='length'),
+    ])
+    result = await react_loop_detailed(client, 'test', 'sys', 'question',
+        [{'type':'function','function':{'name':'ping'}}], {'ping':ping},
+        budget=LoopBudget(max_turns=2), finalize_research=True)
+    assert not result.completed and result.stop_reason == 'length'
+    assert client.completions.calls[-1]['tool_choice'] == 'none'
+
+
+@pytest.mark.asyncio
+async def test_research_stops_slow_collection_in_time_for_final_answer():
+    async def slow(): await asyncio.sleep(1); return 'late'
+    client = FakeClient([
+        FakeResponse(FakeMessage(tool_calls=[FakeToolCall('a','slow','{}')])),
+        FakeResponse(FakeMessage(content='{"summary":"Source timed out","status":"partial"}')),
+    ])
+    result = await react_loop_detailed(client, 'test', 'sys', 'question',
+        [{'type':'function','function':{'name':'slow'}}], {'slow':slow},
+        budget=LoopBudget(overall_deadline_s=.15,llm_timeout_s=.1,tool_timeout_s=1), finalize_research=True)
+    assert result.completed and result.stop_reason == 'budget_finalized'
+    assert client.completions.calls[-1]['tool_choice'] == 'none'
 
 
 class FakeFunction:

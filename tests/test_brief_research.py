@@ -1,5 +1,6 @@
 """Small behavioral suite for the daily-to-research handoff."""
 import asyncio
+import ast
 from copy import deepcopy
 from datetime import date
 import json
@@ -212,8 +213,11 @@ async def test_recheck_requires_valid_complete_evidence_verdicts(saved, tmp_path
             elif failure == "omitted":
                 message.content = json.dumps({"question": "q", "overall_status": "pass", "summary": "done", "verdicts": []})
             elif failure is None:
+                # The verifier must use the actual task-scoped ID it received.
+                prompt = kwargs['messages'][1]['content']
+                evidence_id = ast.literal_eval(prompt.split('Input JSON:\n',1)[1])['reports'][0]['findings'][0]['id']
                 message.content = json.dumps({"question": "q", "overall_status": "pass", "summary": "checked",
-                    "verdicts": [{"evidence_id": "e1", "claim": "Rates caused the move", "status": "verified",
+                    "verdicts": [{"evidence_id": evidence_id, "claim": "Rates caused the move", "status": "verified",
                                   "rechecked_source": "https://example.com/evidence"}]})
             else:
                 response.choices[0].finish_reason = "tool_calls"

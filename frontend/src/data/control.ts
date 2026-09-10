@@ -1,6 +1,6 @@
 import { z } from 'zod';
 export const RunRequestSchema = z.discriminatedUnion('kind', [
-  z.object({kind: z.literal('research'), request_id: z.string().min(8), confirmed: z.literal(true), question: z.string().min(1).max(4000), mode: z.enum(['single', 'team']), agents: z.number().int().min(1).max(4)}),
+  z.object({kind: z.literal('research'), request_id: z.string().min(8), confirmed: z.literal(true), question: z.string().min(1).max(4000), mode: z.enum(['auto', 'single', 'team']), agents: z.number().int().min(1).max(4)}),
   z.object({kind: z.literal('brief'), request_id: z.string().min(8), confirmed: z.literal(true), as_of: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)}),
 ]);
 export type RunRequest = z.infer<typeof RunRequestSchema>;
@@ -11,6 +11,8 @@ export const ControlStatusSchema = z.object({
   jobs: z.array(z.object({id: z.string(), artifact_id: z.string(),
     state: z.enum(['starting', 'running', 'completed', 'unavailable', 'failed', 'timed_out', 'interrupted']),
     message: z.string(), scheduled: z.boolean(), created_at: z.string(), finished_at: z.string().nullable(),
+    answer_status: z.enum(['unknown','unanswered','partial','answer_available']).optional(),
+    routing: z.object({mode:z.enum(['single','team']),intent:z.string(),reason:z.string()}).optional(),
     request: RunRequestSchema})),
   schedule: z.object({enabled: z.boolean(), timezone: z.string(), time: z.string(), state: z.string(),
     message: z.string(), checks: z.number(), next_check: z.string().nullable(), target: z.string().optional()}),

@@ -37,9 +37,23 @@ VERIFIER_PROFILE = "verifier"
 
 
 def _guard_source_discovery(report: VerificationReport, reports: list[ResearchReport], traces: list[ToolTrace]) -> None:
-    """URL-only native retrieval cannot substantiate web claims or close their gaps."""
+    """Retrieval alone cannot substantiate claims, including redirects/download leads."""
     discovered_urls: set[str] = set()
     for trace in traces:
+        if trace.tool == 'read_url':
+            requested = trace.arguments.get('url')
+            if isinstance(requested, str):
+                discovered_urls.add(requested.split('#', 1)[0].rstrip('/'))
+            try:
+                content = json.loads(trace.observation)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(content, dict):
+                urls = [content.get('url'), content.get('requested_url')]
+                if isinstance(content.get('links'), list):
+                    urls.extend(content['links'])
+                discovered_urls.update(url.split('#', 1)[0].rstrip('/') for url in urls if isinstance(url, str))
+            continue
         if trace.tool != "web_search":
             continue
         try:
@@ -62,7 +76,7 @@ def _guard_source_discovery(report: VerificationReport, reports: list[ResearchRe
             verdict.evidence_id in web_ids or source in discovered_urls or source == "web_search"
         ):
             verdict.status = VerificationStatus.UNCHECKED
-            issue = "Native search supplied source leads, not independently checked page content."
+            issue = "Source retrieval supplied leads/content, not an independently established claim verification."
             verdict.issues.append(issue)
             verdict.notes = f"{verdict.notes} {issue}".strip()
             if verdict.claim not in report.unsupported_claims:
@@ -70,7 +84,7 @@ def _guard_source_discovery(report: VerificationReport, reports: list[ResearchRe
             changed = True
     if changed:
         report.overall_status = rollup_status(report.verdicts, report.missing_evidence)
-        report.summary += " Web claims based on native source discovery remain unchecked."
+        report.summary += " Web claims based on source discovery or page retrieval remain unchecked."
 
 
 def _instructions(question: str, reports: list[ResearchReport], static: VerificationReport) -> str:

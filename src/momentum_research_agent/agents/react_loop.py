@@ -118,6 +118,7 @@ async def react_loop_detailed(
     on_llm_response: OnLLMResponse | None = None,
     max_output_tokens: int | None = None,
     temperature: float | None = None,
+    finalize_research: bool = False,
 ) -> ReactLoopResult:
     """Run the native loop and expose whether a final answer really completed."""
     resolved = _resolve_budget(budget, max_turns)
@@ -127,26 +128,54 @@ async def react_loop_detailed(
         {"role": "user", "content": user_message},
     ]
     last_text = ""
+    exhausted: set[str] = set()
+    reserve = min(resolved.llm_timeout_s, resolved.overall_deadline_s / 3)
+    force_final = False
 
     for _turn in range(resolved.max_turns):
-        llm_timeout = _remaining_timeout(deadline, resolved.llm_timeout_s)
+        finalizing = finalize_research and (
+            force_final or _turn == resolved.max_turns - 1
+            or deadline - time.monotonic() <= reserve
+            or bool(tool_registry) and not (set(tool_registry) - exhausted)
+        )
+        if finalizing:
+            messages.append({'role': 'system', 'content':
+                'Research budget is ending. Do not call more tools. Return the required '
+                'ResearchReport JSON now using only observations already obtained. '
+                'Use partial status and explicit unanswered_questions for missing evidence. '
+                'Never infer facts from source titles/URLs alone.'})
+        phase_deadline = deadline if finalizing or not finalize_research else deadline - reserve
+        llm_timeout = _remaining_timeout(phase_deadline, resolved.llm_timeout_s)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
+        available = [t for t in tools if t['function']['name'] not in exhausted]
         if tools:
-            kwargs["tools"] = tools
+            kwargs["tools"] = tools if finalizing else available
+            if not available and not finalizing:
+                kwargs.pop('tools')
+        if finalizing:
+            if tools:
+                kwargs['tool_choice'] = 'none'
+            kwargs['response_format'] = {'type': 'json_object'}
         if max_output_tokens is not None:
             kwargs["max_tokens"] = max_output_tokens
         if temperature is not None:
             kwargs["temperature"] = temperature
         if before_llm_request is not None:
             before_llm_request()
-        response = await _await_bounded(
-            client.chat.completions.create(**kwargs),
-            llm_timeout,
-            AgentDeadlineExceeded(f"LLM call timed out after {llm_timeout:.1f}s."),
-        )
+        try:
+            response = await _await_bounded(
+                client.chat.completions.create(**kwargs),
+                llm_timeout,
+                AgentDeadlineExceeded(f"LLM call timed out after {llm_timeout:.1f}s."),
+            )
+        except AgentDeadlineExceeded:
+            if finalize_research and not finalizing and any(m['role'] == 'tool' for m in messages):
+                force_final = True
+                continue
+            raise
         if on_llm_response is not None:
             on_llm_response(response)
         _record_usage(usage_tracker, model, response)
@@ -181,20 +210,28 @@ async def react_loop_detailed(
             return ReactLoopResult(
                 text=current_text,
                 completed=True,
-                stop_reason="completed",
+                stop_reason="budget_finalized" if finalizing else "completed",
             )
 
+        if finalizing:
+            return ReactLoopResult(text='', completed=False, stop_reason='finalization_tool_call')
         last_text = current_text or last_text
         for call in tool_calls:
             name = call.function.name
             arguments = _parse_arguments(call.function.arguments)
-            if name not in tool_registry:
+            if finalize_research and time.monotonic() >= phase_deadline:
+                force_final = True
+                result = json.dumps({'status':'unavailable', 'reason':'Collection deadline reached; finalize from saved observations.'})
+            elif name in exhausted:
+                result = json.dumps({'status': 'unavailable', 'budget_exhausted': True,
+                                     'reason': 'Tool budget exhausted; do not retry.'})
+            elif name not in tool_registry:
                 result = (
                     f"UNAUTHORIZED: tool '{name}' is not on this agent's allowlist. "
                     f"Available: {', '.join(sorted(tool_registry)) or '(none)'}"
                 )
             else:
-                tool_timeout = _remaining_timeout(deadline, resolved.tool_timeout_s)
+                tool_timeout = _remaining_timeout(phase_deadline, resolved.tool_timeout_s)
                 try:
                     result = await _await_bounded(
                         call_tool(tool_registry[name], arguments),
@@ -206,13 +243,23 @@ async def react_loop_detailed(
                 except asyncio.CancelledError:
                     raise
                 except ToolExecutionTimeout:
-                    raise
+                    if not finalize_research or tool_timeout >= resolved.tool_timeout_s:
+                        raise
+                    force_final = True
+                    result = json.dumps({'status':'unavailable', 'reason':'Collection deadline reached; tool interrupted to reserve final answer time.'})
                 except AgentDeadlineExceeded:
                     raise
                 except UnauthorizedTool:
                     raise
                 except Exception as exc:
                     result = f"Tool '{name}' raised {type(exc).__name__}: {exc}"
+            if finalize_research:
+                try:
+                    payload = json.loads(result)
+                except (ValueError, TypeError):
+                    payload = None
+                if isinstance(payload, dict) and payload.get('budget_exhausted') is True:
+                    exhausted.add(name)
             if on_tool_call is not None:
                 on_tool_call(name, arguments, result)
             messages.append(

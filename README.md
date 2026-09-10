@@ -10,11 +10,11 @@ This is an original, purpose-built orchestration layer. It sits on top of a dete
 question
    │
    ▼
-Coordinator (deepseek-reasoner)
+Coordinator (deepseek-flash)
    ├─ decompose → TaskBoard (disk)
    ├─ gap seed  → at most 2 kind=gap tasks from reports/gap_ledger.jsonl
    ├─ engine warm → subprocess run_mvp cache (~90s)
-   ├─ dispatch  → bounded SubAgents in parallel (deepseek-chat, ReAct + allowlisted tools)
+   ├─ dispatch  → bounded SubAgents in parallel (deepseek-flash, ReAct + allowlisted tools)
    │                └─ ResearchReport { findings: Evidence[], summary, status }
    ├─ replan    → at most one kind=replan (BLOCKED / mock / V_D fail)
    ├─ verify    → independent Verifier (static audit + ReAct re-check of Evidence[])
@@ -144,7 +144,7 @@ uv run momentum-research-agent --live-compare \
 
 Expectations are reviewer-authored in a separate `behavioral_expectations_v1` JSON object. Each entry binds `case_id` and canonical `case_sha256`, labels the case `target` or `guard`, records reviewer/provenance/rationale, declares at least one exact tool call, and requires either observation-backed evidence or explicit claim withholding. This is bounded behavioral assertion coverage, not a general semantic truth or research-quality score. A cases JSON file may contain full `SessionEvalCase` objects or explicit case IDs already present under `reports/eval_cases/`.
 
-The 2026-09-05 controller-owned synthetic wiring smoke used one target, one guard, one repeat, three turns, a 12-request cap, and 1,024 output tokens/request. All four policy/case runs completed in eight requests and resolved to `deepseek-v4-flash`; the active pointer was unchanged. Both policies passed both toy cases, so the result demonstrated bounded replay/comparison wiring and observed guard non-regression, not historical performance or candidate improvement.
+The 2026-09-05 controller-owned synthetic wiring smoke used one target, one guard, one repeat, three turns, a 12-request cap, and 1,024 output tokens/request. All four policy/case runs completed in eight requests and resolved to `deepseek-v4.1-flash` (sent as `deepseek-flash`); the active pointer was unchanged. Both policies passed both toy cases, so the result demonstrated bounded replay/comparison wiring and observed guard non-regression, not historical performance or candidate improvement.
 
 Flags: `--mode team|single`, `--session-dir`, `--resume`, `--max-sub-agents`, `--model`, `--coordinator-model`, `--verbose`, `--eval`, `--improve`, `--import-session`, `--live-compare`, plus the explicit live comparison input and bound flags shown above.
 
@@ -213,11 +213,12 @@ client = AsyncOpenAI(
 )
 ```
 
-Default model IDs follow the original DeepSeek aliases (`deepseek-chat` for sub-agents, `deepseek-reasoner` for decompose/synthesize). Those aliases were retired in July 2026; if calls fail, set:
+Sub-agents and coordinator default to `deepseek-flash`, the official API ID for
+[DeepSeek V4.1 Flash](https://www.deepseek.com/en/news/deepseek-v4-1-flash/).
 
 ```bash
-SUB_AGENT_MODEL=deepseek-v4-flash
-COORDINATOR_MODEL=deepseek-v4-pro
+SUB_AGENT_MODEL=deepseek-flash
+COORDINATOR_MODEL=deepseek-flash
 ```
 
 Cost estimates use published USD / 1M-token rates (cache-hit and peak/off-peak ignored):
@@ -226,7 +227,7 @@ Cost estimates use published USD / 1M-token rates (cache-hit and peak/off-peak i
 | --- | ---: | ---: |
 | deepseek-chat | $0.27 | $1.10 |
 | deepseek-reasoner | $0.55 | $2.19 |
-| deepseek-v4-flash | $0.22 | $0.66 |
+| deepseek-flash | $0.22 | $0.66 |
 | deepseek-v4-pro | $0.66 | $1.98 |
 
 See [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing).

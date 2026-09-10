@@ -19,6 +19,8 @@ import {
   EvidenceInspector,
 } from "../components/evidence/EvidenceCard";
 import { ThesisDiff } from "../components/research/ThesisDiff";
+import { ResearchAnswer } from "../components/research/ResearchAnswer";
+import { NumericObservations } from "../components/research/NumericObservations";
 import {
   Badge,
   StateBadge,
@@ -199,6 +201,7 @@ export function SessionWorkspace() {
                 <div className="executive-summary">
                   <span className="eyebrow">THE RESEARCH VIEW</span>
                   <p>{s.synthesis.executive_summary}</p>
+                  <NumericObservations metrics={s.synthesis.metrics}/>
                 </div>
                 {Object.entries(s.synthesis.analysis_by_dimension).map(
                   ([heading, text]) => (
@@ -236,7 +239,7 @@ export function SessionWorkspace() {
                   Explore session evidence <ArrowRight size={14} />
                 </button>
               </>
-            ) : (
+            ) : s.reports.length ? s.reports.map(report => <ResearchAnswer key={report.task_id} report={report} />) : (
               <Empty title="Synthesis not yet available">
                 The available task reports and evidence remain accessible.
               </Empty>

@@ -1,4 +1,5 @@
 import sys
+import json
 from datetime import datetime
 from pathlib import Path
 from threading import Event
@@ -10,8 +11,42 @@ from control_calendar import latest_completed, next_morning
 from control_manager import ControlManager, validate_request
 
 
+def test_failed_research_surfaces_typed_cause_not_sensitive_exception(tmp_path):
+    m = manager(tmp_path)
+    folder = m.reports / 'failed_case'
+    folder.mkdir(parents=True)
+    (folder/'task_board.json').write_text(json.dumps({'tasks':[{'status':'BLOCKED', 'error_type':'AgentDeadlineExceeded', 'error':'secret-provider-body'}]}))
+    state, message = m._classify({'artifact_id':'failed_case','request':{'kind':'research'}},1)
+    assert state == 'failed' and 'deadline' in message.lower()
+    assert 'secret-provider-body' not in message
+
+
+def test_auto_lookup_dispatches_single_and_completion_is_not_answer(tmp_path):
+    m = manager(tmp_path)
+    raw = {**request(), 'mode':'auto', 'question':'MTUM top 10 holdings'}
+    validated = validate_request(raw, at('2026-09-09T08:00:00-04:00'))
+    command = m._command({'artifact_id':'new_session','request':validated})
+    assert command[command.index('--mode')+1] == 'single'
+    assert command[command.index('--max-sub-agents')+1] == '1'
+    folder=m.reports/'new_session';folder.mkdir(parents=True)
+    (folder/'task_board.json').write_text(json.dumps({'tasks':[]}))
+    assert m._research_outcome('new_session') == 'unanswered'
+
+
 def at(value):
     return datetime.fromisoformat(value)
+
+
+def test_coverage_accounts_for_missing_or_blocked_team_dimensions(tmp_path):
+    m=manager(tmp_path)
+    folder=m.reports/'coverage_case';sub=folder/'sub_reports';sub.mkdir(parents=True)
+    (sub/'a.json').write_text(json.dumps({'task_id':'a','title':'Context','agent_role':'momentum_analyst','summary':'Context',
+        'findings':[{'claim':'Context','category':'other','stance':'neutral'}],'status':'complete'}))
+    board=folder/'task_board.json'
+    board.write_text(json.dumps({'tasks':[{'id':'a','status':'COMPLETED'},{'id':'b','status':'BLOCKED'}]}))
+    assert m._research_outcome('coverage_case') == 'partial'
+    board.write_text(json.dumps({'tasks':[{'id':'a','status':'COMPLETED'}]}))
+    assert m._research_outcome('coverage_case') == 'answer_available'
 
 
 @pytest.mark.parametrize('now, expected', [

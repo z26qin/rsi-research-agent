@@ -18,7 +18,7 @@ from momentum_research_agent.models.schemas import (
 )
 from momentum_research_agent.tools.engine_adapter import normalize_engine_payload
 
-TRACEABLE_TOOLS = frozenset({"engine_query", "web_search"})
+TRACEABLE_TOOLS = frozenset({"engine_query", "web_search", "read_url"})
 MAX_OBSERVATION_CHARS = 4000
 
 
@@ -76,8 +76,9 @@ def record_trace(
     if tool not in TRACEABLE_TOOLS:
         return None
     canonical = canonicalize_observation(tool, observation)
-    truncated = len(canonical) > MAX_OBSERVATION_CHARS
-    stored = canonical[:MAX_OBSERVATION_CHARS]
+    limit = 200_000 if tool == 'read_url' else MAX_OBSERVATION_CHARS
+    truncated = len(canonical) > limit
+    stored = canonical[:limit]
     if truncated:
         stored = stored + "\n…[truncated]"
     return ToolTrace(

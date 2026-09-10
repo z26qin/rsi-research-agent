@@ -24,7 +24,8 @@ or copy personal credential files. For the existing local configuration, load
 `DEEPSEEK_API_KEY` or its `DeepSeekAPI` alias from the user-owned `.env` into the
 process only; never paste it into a command, report, or commit.
 
-The script pins `deepseek-v4-flash`, the bundled historical engine, and the
+The script pins `deepseek-flash` (the official V4.1 Flash API ID),
+the bundled historical engine, and the
 2026-05-29 SPY task. It snapshots the current active policy read-only, or uses an
 empty baseline when no active policy exists. Only `engine_query` is exposed.
 No new data-service API key is required. This is historical research, not current

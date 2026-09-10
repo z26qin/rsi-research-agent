@@ -41,7 +41,7 @@ from momentum_research_agent.tools.engine_pipeline import run_pipeline
 from momentum_research_agent.tools.registry import ToolContext, resolve_tools, set_tool_context
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 BUDGET = LoopBudget(max_turns=3, overall_deadline_s=120, llm_timeout_s=40, tool_timeout_s=15)
 QUESTION = (
     "Use engine_query(ticker='SPY', end='2026-05-29') to assess momentum tail risk "

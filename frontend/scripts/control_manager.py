@@ -31,7 +31,7 @@ def validate_request(raw, now):
             raise ValueError('Unsupported research parameters')
         if not isinstance(raw['question'], str) or not 1 <= len(raw['question'].strip()) <= 4000:
             raise ValueError('Question must contain 1–4000 characters')
-        if raw['mode'] not in ('single', 'team') or type(raw['agents']) is not int or not 1 <= raw['agents'] <= 4:
+        if raw['mode'] not in ('auto', 'single', 'team') or type(raw['agents']) is not int or not 1 <= raw['agents'] <= 4:
             raise ValueError('Select single/team mode and 1–4 agents')
         return {**raw, 'question': raw['question'].strip(), 'agents': 1 if raw['mode'] == 'single' else raw['agents']}
     if raw.get('kind') == 'brief':
@@ -131,9 +131,45 @@ class ControlManager:
         with self.lock:
             result = copy.deepcopy(self.data)
         result['jobs'] = list(reversed(result['jobs']))
+        from momentum_research_agent.research_contract import route_question
+        for job in result['jobs']:
+            if job['request']['kind'] == 'research':
+                job['routing'] = route_question(job['request']['question'], job['request']['mode'])
+                job['answer_status'] = self._research_outcome(job['artifact_id'])
         result.update(service='online', checked_at=(now or utcnow()).isoformat(),
                       calendar='NYSE 2026–2028', limits={'research_seconds': 900, 'brief_seconds': 180})
         return result
+
+    def _research_outcome(self, artifact_id):
+        from momentum_research_agent.models.schemas import ResearchReport
+        from momentum_research_agent.research_contract import answer_status, ground_report
+        from momentum_research_agent.state.traces import load_traces
+        folder = self.reports / artifact_id
+        if folder.is_symlink(): return 'unknown'
+        sub = folder / 'sub_reports'
+        if not sub.is_dir() or sub.is_symlink(): return 'unanswered'
+        reports = []
+        try:
+            for path in list(sub.glob('*.json'))[:20]:
+                if path.is_symlink() or path.stat().st_size > 1_000_000: return 'unknown'
+                reports.append(ResearchReport.model_validate_json(path.read_text()))
+            trace_path = folder / 'traces.jsonl'
+            if trace_path.is_symlink() or (trace_path.exists() and trace_path.stat().st_size > 4_000_000): return 'unknown'
+            traces = load_traces(folder)
+            reports = [ground_report(r,traces) for r in reports]
+            outcome = answer_status(reports)
+            if outcome == 'answer_available':
+                board_path = folder / 'task_board.json'
+                if board_path.is_symlink() or not board_path.is_file() or board_path.stat().st_size > 1_000_000:
+                    return 'partial'
+                board = json.loads(board_path.read_text())
+                tasks = board.get('tasks', [])
+                covered = {r.task_id for r in reports}
+                if not tasks or any(t.get('status') != 'COMPLETED' or t.get('id') not in covered for t in tasks):
+                    return 'partial'
+            return outcome
+        except (OSError, ValueError):
+            return 'unknown'
 
     def submit(self, raw, now=None, scheduled=False):
         now = now or utcnow()
@@ -187,7 +223,9 @@ class ControlManager:
                     str(self.root), r['as_of'], str(output)]
         argv = [sys.executable, '-m', 'momentum_research_agent.cli', '--session-dir', str(output)]
         if r['kind'] == 'research':
-            argv += ['--mode', r['mode'], '--max-sub-agents', str(r['agents']), '--', r['question']]
+            from momentum_research_agent.research_contract import route_question
+            mode = route_question(r['question'], r['mode'])['mode']
+            argv += ['--mode', mode, '--max-sub-agents', str(1 if mode == 'single' else r['agents']), '--', r['question']]
         else:
             argv += ['--daily-brief', '--as-of', r['as_of']]
             previous = self._previous_brief(r['as_of'])
@@ -224,7 +262,9 @@ class ControlManager:
                 self.processes[job['id']] = process
                 job.update(state='running', message='Backend process is running')
                 self._save()
-            code = process.wait(timeout=180 if job['request']['kind'] == 'brief' else 900)
+            from momentum_research_agent.research_contract import route_question
+            limit = 180 if job['request']['kind'] == 'brief' else (120 if route_question(job['request']['question'], job['request']['mode'])['mode'] == 'single' else 900)
+            code = process.wait(timeout=limit)
             if self.stopping:
                 return 'interrupted', 'Service stopped; run was not replayed'
             return self._classify(job, code)
@@ -266,6 +306,20 @@ class ControlManager:
         # Exit success is a process result, never a verifier claim.
         if code == 0 and (folder / 'task_board.json').is_file():
             return 'completed', 'Research process finished; inspect reports and independent verification'
+        try:
+            board = folder / 'task_board.json'
+            if not board.is_symlink() and board.stat().st_size < 1_000_000:
+                tasks = json.loads(board.read_text()).get('tasks', [])
+                causes = {task.get('error_type') for task in tasks if isinstance(task, dict)}
+                for kind, message in (
+                    ('AgentDeadlineExceeded', 'Research deadline reached; inspect retained observations and evidence gaps.'),
+                    ('ToolExecutionTimeout', 'A research tool timed out; inspect retained observations.'),
+                    ('UnauthorizedTool', 'Research requested a tool outside its explicit allowlist.'),
+                ):
+                    if kind in causes:
+                        return 'failed', message
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
         return 'failed', 'Research process failed; check backend configuration and saved artifacts'
 
     @staticmethod

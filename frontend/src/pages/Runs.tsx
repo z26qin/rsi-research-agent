@@ -22,7 +22,7 @@ export function Runs() {
   const research = saved.research?.kind === 'research' ? saved.research : undefined;
   const brief = saved.brief?.kind === 'brief' ? saved.brief : undefined;
   const [question, setQuestion] = useState(research?.question ?? params.get('q') ?? '');
-  const [mode, setMode] = useState(research?.mode ?? 'team'), [agents, setAgents] = useState(research?.agents ?? 3), [asOf, setAsOf] = useState(brief?.as_of ?? '');
+  const [mode, setMode] = useState(research?.mode ?? 'auto'), [agents, setAgents] = useState(research?.agents ?? 1), [asOf, setAsOf] = useState(brief?.as_of ?? '');
   const [researchConfirmed, setResearchConfirmed] = useState(false), [briefConfirmed, setBriefConfirmed] = useState(false);
   const [pending, setPending] = useState(false), [notice, setNotice] = useState('');
   const query = useQuery<ControlStatus>({queryKey: ['control-status'], queryFn: () => controlRequest('/status'), retry: false, refetchInterval: 3000});
@@ -85,8 +85,9 @@ export function Runs() {
     <div className="run-forms">
       <form className="latest-brief" onSubmit={e => {e.preventDefault(); if (researchConfirmed && !disabled) void submit('research');}}>
         <h2>Run research</h2><label>Research question<textarea aria-label="Research question" disabled={pending || !!research} value={question} maxLength={4000} onChange={e => setQuestion(e.target.value)} required /></label>
-        <div className="brief-timing"><label>Mode<select aria-label="Research mode" disabled={pending || !!research} value={mode} onChange={e => setMode(e.target.value as 'single' | 'team')}><option value="team">Team</option><option value="single">Single analyst</option></select></label><label>Analysts<select aria-label="Analyst count" disabled={pending || !!research || mode === 'single'} value={mode === 'single' ? 1 : agents} onChange={e => setAgents(Number(e.target.value))}>{[1,2,3,4].map(n => <option key={n}>{n}</option>)}</select></label></div>
-        <p className="brief-disclaimer">Uses configured models and allowed external tools; may incur API charges. Existing agent budgets apply. Service deadline: 15 minutes. No automatic retry.</p>
+        <div className="brief-timing"><label>Mode<select aria-label="Research mode" disabled={pending || !!research} value={mode} onChange={e => setMode(e.target.value as 'auto' | 'single' | 'team')}><option value="auto">Auto — identify question type</option><option value="single">Direct answer — Single analyst</option><option value="team">Deep research — Team</option></select></label><label>Research analysts<select aria-label="Analyst count" disabled={pending || !!research || mode === 'single'} value={mode === 'single' ? 1 : agents} onChange={e => setAgents(Number(e.target.value))}>{[1,2,3,4].map(n => <option key={n}>{n}</option>)}</select></label></div>
+        <p className="brief-disclaimer">Auto uses transparent question rules: factual lookups use one analyst; comparisons, causal explanations and assessments use deep research. You can override it. Direct answers skip decomposition, engine warm-up and follow-up; independent verification remains separate. Deep research with one analyst still runs the full workflow.</p>
+        <p className="brief-disclaimer">May incur API charges. Existing agent budgets apply. Service deadline: direct answer 2 minutes; deep research 15 minutes. No automatic retry.</p>
         <label className="run-confirm"><input type="checkbox" checked={researchConfirmed} onChange={e => setResearchConfirmed(e.target.checked)} />I authorize this research run and its backend API usage.</label>
         <button className="button dark" disabled={disabled || !researchConfirmed || !question.trim()}>Run research</button>
       </form>
@@ -99,8 +100,11 @@ export function Runs() {
     </div>
     <section className="latest-brief"><h2>Run history</h2>{active && <p className="notice">A service-owned job is active. New submissions are blocked until it finishes.</p>}
       {!query.data?.jobs.length && <p className="muted">No service-owned runs recorded.</p>}
-      {query.data?.jobs.map(job => <article key={job.id} className="run-history-item"><div className="brief-timing"><strong>{job.request.kind === 'research' ? job.request.question : 'Daily Brief · ' + job.request.as_of}</strong><Badge>{job.state.replaceAll('_', ' ')}</Badge></div><p>{job.message}</p><p className="muted">{job.scheduled ? 'Scheduled' : 'Manual'} · Started {formatDate(job.created_at)}{job.finished_at ? ' · Finished ' + formatDate(job.finished_at) : ''}</p>
-        {['completed', 'unavailable'].includes(job.state) && <Link className="text-link" onClick={() => w.setSource('artifact')} to={(job.request.kind === 'brief' ? '/briefs/' : '/sessions/') + encodeURIComponent(job.artifact_id)}>View saved artifacts →</Link>}
+      {query.data?.jobs.map(job => <article key={job.id} className="run-history-item"><div className="brief-timing"><strong>{job.request.kind === 'research' ? job.request.question : 'Daily Brief · ' + job.request.as_of}</strong><Badge>{job.state === 'completed' ? 'Process finished' : job.state.replaceAll('_', ' ')}</Badge></div><p>{job.message}</p>
+        {job.routing && <p>{job.routing.intent === 'direct_answer' ? 'Direct answer' : 'Deep research'} · {job.routing.reason}</p>}
+        {job.answer_status && <p>Answer coverage: {{unknown:'unknown',unanswered:'Question unanswered',partial:'Partial answer',answer_available:'Answer available — not independently verified'}[job.answer_status]}</p>}
+        <p className="muted">{job.scheduled ? 'Scheduled' : 'Manual'} · Started {formatDate(job.created_at)}{job.finished_at ? ' · Finished ' + formatDate(job.finished_at) : ''}</p>
+        {['completed', 'unavailable', 'failed', 'timed_out', 'interrupted'].includes(job.state) && <Link className="text-link" onClick={() => w.setSource('artifact')} to={(job.request.kind === 'brief' ? '/briefs/' : '/sessions/') + encodeURIComponent(job.artifact_id)}>View saved artifacts →</Link>}
       </article>)}
       <p className="brief-disclaimer">Process completion is not independent verification. Direct CLI runs outside this service are not included in this run queue.</p>
     </section>

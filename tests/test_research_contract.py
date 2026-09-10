@@ -76,6 +76,17 @@ def test_failed_retrieval_becomes_limitation_not_followup_evidence():
     assert result.status == 'insufficient_evidence' and answer_status([result]) == 'unanswered'
 
 
+def test_unrequested_web_url_is_withheld_as_ungrounded():
+    from momentum_research_agent.research_contract import ground_report
+    report=ResearchReport(task_id='t',title='Holdings',agent_role='momentum_analyst',summary='AAA is 10%',status='complete',findings=[
+        {'id':'e','claim':'AAA is 10%','category':'other','stance':'neutral','source_url':'https://invented.example/holdings'}],
+        metrics=[{'name':'AAA','value':10,'unit':'%','as_of':'2026-09-08','source_url':'https://invented.example/holdings','evidence_id':'e'}])
+    result=ground_report(report,[])
+    assert result.findings == []
+    assert result.metrics[0].value is None
+    assert result.status == 'insufficient_evidence'
+
+
 def test_cross_task_evidence_ids_and_metric_references_do_not_collide():
     from momentum_research_agent.agents.sub_agent import _bind_report
     from momentum_research_agent.models.schemas import Task

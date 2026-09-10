@@ -46,3 +46,21 @@ async def test_structured_answer_roundtrips_and_finalization_forces_partial(tmp_
     assert str(result.report.as_of) == '2026-09-08'
     assert result.report.limitations == ['Recorded example only']
     assert result.report.summary == 'AAA is 10%'
+
+
+@pytest.mark.asyncio
+async def test_single_run_propagates_verifier_failure_and_blocks_task(tmp_path, monkeypatch):
+    from rich.console import Console
+    from momentum_research_agent import cli
+    from momentum_research_agent.models.schemas import AgentRunResult, ResearchReport, UsageSummary
+    report = ResearchReport(task_id='t', title='Answer', agent_role='momentum_analyst',
+                            summary='Partial', status='insufficient_evidence')
+    async def analyst(*args, **kwargs): return AgentRunResult(report=report)
+    async def verifier(*args, **kwargs): raise RuntimeError('verifier unavailable')
+    monkeypatch.setattr(cli.SubAgent, 'run', analyst)
+    monkeypatch.setattr(cli.Verifier, 'run', verifier)
+    with pytest.raises(RuntimeError, match='verifier unavailable'):
+        await cli.run_single(question='q', session_dir=tmp_path, client=object(), model='test',
+                             project_root=tmp_path, verbose=False, console=Console(), usage=UsageSummary())
+    board = json.loads((tmp_path/'task_board.json').read_text())
+    assert board['tasks'][0]['status'] == 'BLOCKED'

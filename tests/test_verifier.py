@@ -15,6 +15,7 @@ from momentum_research_agent.models.schemas import (
     VerificationReport,
     VerificationStatus,
 )
+from momentum_research_agent.agents.ledger import record_trace
 from momentum_research_agent.state.reports import load_verification_report
 
 
@@ -138,3 +139,21 @@ async def test_verifier_skips_llm_when_no_evidence(tmp_path: Path) -> None:
     assert client.completions.calls == []
     assert result.report.overall_status == "fail"
     assert load_verification_report(tmp_path / "session") is not None
+
+
+def test_web_verdict_requires_successful_independent_verifier_read() -> None:
+    from momentum_research_agent.agents.verifier import _guard_source_discovery
+    url = 'https://example.com/crowding'
+    verified = VerificationReport(question='q',overall_status='pass',summary='ok',verdicts=[{
+        'evidence_id':'ev01','claim':'Crowding score is elevated.','status':'verified','rechecked_source':url}])
+    analyst = record_trace('read_url', {'url':url}, json.dumps({'status':'ok','url':url}), agent_role='momentum_analyst')
+    assert analyst is not None
+    _guard_source_discovery(verified, [_report()], [analyst])
+    assert verified.verdicts[0].status is VerificationStatus.UNCHECKED
+
+    verified = VerificationReport(question='q',overall_status='pass',summary='ok',verdicts=[{
+        'evidence_id':'ev01','claim':'Crowding score is elevated.','status':'verified','rechecked_source':url}])
+    verifier = record_trace('read_url', {'url':url}, json.dumps({'status':'ok','url':url}), agent_role='verifier')
+    assert verifier is not None
+    _guard_source_discovery(verified, [_report()], [analyst, verifier])
+    assert verified.verdicts[0].status is VerificationStatus.VERIFIED

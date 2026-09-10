@@ -287,7 +287,6 @@ async def run_single(
             tool_calls=result.tool_calls,
             tokens_used=result.usage.total_tokens,
         )
-        board.complete(task.id, result.report.summary)
         console.print(
             Panel(
                 Markdown(render_research_report_markdown(result.report)),
@@ -302,20 +301,16 @@ async def run_single(
             verbose=verbose,
             console=console,
         )
-        try:
-            verified = await verifier.run(question, [result.report], session_dir)
-            usage.extend(verified.usage)
-            console.print(
-                Panel(
-                    Markdown(render_verification_markdown(verified.report)),
-                    title="Verification",
-                    border_style="yellow",
-                )
+        verified = await verifier.run(question, [result.report], session_dir)
+        usage.extend(verified.usage)
+        console.print(
+            Panel(
+                Markdown(render_verification_markdown(verified.report)),
+                title="Verification",
+                border_style="yellow",
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            console.print(f"[red]Verifier failed:[/red] {exc}")
+        )
+        board.complete(task.id, result.report.summary)
     except Exception as exc:
         board.fail(task.id, str(exc), error_type=type(exc).__name__)
         raise

@@ -36,6 +36,7 @@ def source_catalog(question: str) -> str:
 
 def ground_report(report: ResearchReport, traces: list[ToolTrace]) -> ResearchReport:
     def key(url): return url.split('#',1)[0].rstrip('/') if isinstance(url,str) else ''
+    def is_web(url): return key(url).startswith(('https://', 'http://'))
     failed, leads, read = set(), set(), set()
     for trace in traces:
         try:
@@ -48,7 +49,8 @@ def ground_report(report: ResearchReport, traces: list[ToolTrace]) -> ResearchRe
             (read if data.get('status') == 'ok' else failed).update(urls)
         elif trace.tool == 'web_search' and data.get('evidence_kind') == 'source_discovery':
             leads.update(key(s.get('url')) for s in data.get('sources',[]) if isinstance(s,dict))
-    removed = [e for e in report.findings if e.kind == 'retrieval' or key(e.source_url) in ((failed | leads) - read)]
+    removed = [e for e in report.findings if e.kind == 'retrieval' or
+               (is_web(e.source_url) and key(e.source_url) not in read)]
     if not removed: return report
     removed_ids = {e.id for e in removed}
     report.findings = [e for e in report.findings if e.id not in removed_ids]

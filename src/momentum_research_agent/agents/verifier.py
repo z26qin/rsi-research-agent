@@ -39,11 +39,14 @@ VERIFIER_PROFILE = "verifier"
 def _guard_source_discovery(report: VerificationReport, reports: list[ResearchReport], traces: list[ToolTrace]) -> None:
     """Retrieval alone cannot substantiate claims, including redirects/download leads."""
     discovered_urls: set[str] = set()
+    verifier_reads: set[str] = set()
+    def key(url: object) -> str:
+        return url.split("#", 1)[0].rstrip("/") if isinstance(url, str) else ""
     for trace in traces:
         if trace.tool == 'read_url':
             requested = trace.arguments.get('url')
             if isinstance(requested, str):
-                discovered_urls.add(requested.split('#', 1)[0].rstrip('/'))
+                discovered_urls.add(key(requested))
             try:
                 content = json.loads(trace.observation)
             except (ValueError, TypeError):
@@ -52,7 +55,10 @@ def _guard_source_discovery(report: VerificationReport, reports: list[ResearchRe
                 urls = [content.get('url'), content.get('requested_url')]
                 if isinstance(content.get('links'), list):
                     urls.extend(content['links'])
-                discovered_urls.update(url.split('#', 1)[0].rstrip('/') for url in urls if isinstance(url, str))
+                normalized = {key(url) for url in urls if key(url)}
+                discovered_urls.update(normalized)
+                if trace.agent_role == VERIFIER_PROFILE and content.get('status') == 'ok':
+                    verifier_reads.update({key(requested), key(content.get('url')), key(content.get('requested_url'))} - {''})
             continue
         if trace.tool != "web_search":
             continue
@@ -64,19 +70,23 @@ def _guard_source_discovery(report: VerificationReport, reports: list[ResearchRe
                 and observation.get("evidence_kind") == "source_discovery" and observation.get("status") == "ok"):
             for source in observation.get("sources", []):
                 if isinstance(source, dict) and isinstance(source.get("url"), str):
-                    discovered_urls.add(source["url"].split("#", 1)[0].rstrip("/"))
-    if not discovered_urls:
-        return
+                    discovered_urls.add(key(source["url"]))
     web_ids = {item.id for research in reports for item in research.findings
-               if (item.source_url or "").split("#", 1)[0].rstrip("/") in discovered_urls}
+               if key(item.source_url) in discovered_urls}
     changed = False
     for verdict in report.verdicts:
-        source = (verdict.rechecked_source or "").split("#", 1)[0].rstrip("/")
-        if verdict.status is VerificationStatus.VERIFIED and (
-            verdict.evidence_id in web_ids or source in discovered_urls or source == "web_search"
-        ):
+        source = key(verdict.rechecked_source)
+        independently_read = source in verifier_reads
+        if not independently_read and verdict.evidence_id in web_ids:
+            independently_read = any(
+                key(item.source_url) in verifier_reads
+                for research in reports for item in research.findings
+                if item.id == verdict.evidence_id
+            )
+        web_claim = verdict.evidence_id in web_ids or source in discovered_urls or source == "web_search"
+        if verdict.status is VerificationStatus.VERIFIED and web_claim and not independently_read:
             verdict.status = VerificationStatus.UNCHECKED
-            issue = "Source retrieval supplied leads/content, not an independently established claim verification."
+            issue = "Web claim lacks a successful independent verifier source read."
             verdict.issues.append(issue)
             verdict.notes = f"{verdict.notes} {issue}".strip()
             if verdict.claim not in report.unsupported_claims:

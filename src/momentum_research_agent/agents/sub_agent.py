@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -11,9 +12,10 @@ from openai import AsyncOpenAI
 from pydantic import ValidationError
 
 from momentum_research_agent.agents.budget import LoopBudget
-from momentum_research_agent.agents.react_loop import react_loop
+from momentum_research_agent.agents.react_loop import react_loop_detailed
 from momentum_research_agent.agents.ledger import record_trace
-from momentum_research_agent.errors import AgentRuntimeError
+from momentum_research_agent.errors import AgentRuntimeError, AgentDeadlineExceeded
+from momentum_research_agent.research_contract import source_catalog, ground_report
 from momentum_research_agent.models.schemas import (
     AgentRunResult,
     ResearchReport,
@@ -69,6 +71,7 @@ def load_profile(
 def _report_instructions(task: Task) -> str:
     return (
         f"# Assignment\n\n{task.assignment}\n\n"
+        + source_catalog(task.assignment) + '\n\n' +
         "Investigate using only your authorized tools. The ReAct trajectory stays "
         "internal; the coordinator receives only the final JSON ResearchReport.\n\n"
         "Collect concrete evidence. Distinguish supporting vs contradicting items. "
@@ -82,11 +85,17 @@ def _report_instructions(task: Task) -> str:
         f'  "title": "{task.title}",\n'
         f'  "agent_role": "{task.profile}",\n'
         '  "summary": "short human-readable view",\n'
+        '  "as_of": "YYYY-MM-DD or null; actual data date, never fetch date",\n'
+        '  "sources": ["URLs actually observed; source leads are not verified facts"],\n'
+        '  "limitations": ["evidence and coverage limits"],\n'
+        '  "metrics": [{"name":"metric / holding name", "value":12.3, "unit":"%", "as_of":"YYYY-MM-DD", "source_url":"retrieved URL", "evidence_id":"e1", "missing_reason":null}],\n'
         '  "status": "complete" | "partial" | "insufficient_evidence",\n'
         '  "unanswered_questions": ["..."],\n'
         '  "contradictions": ["..."],\n'
         '  "findings": [\n'
         "    {\n"
+        '      "id": "e1",\n'
+        '      "kind": "research",\n'
         '      "claim": "...",\n'
         '      "category": "market_regime" | "crowded_positioning" | '
         '"fundamental_repricing" | "contradicting_evidence" | "other",\n'
@@ -104,9 +113,13 @@ def _report_instructions(task: Task) -> str:
 
 
 def _bind_report(task: Task, report: ResearchReport) -> ResearchReport:
+    identifiers = {item.id: f'{task.id}:{item.id}' for item in report.findings}
     for item in report.findings:
-        if not item.agent_id:
-            item.agent_id = task.id
+        item.id = identifiers[item.id]
+        item.agent_id = task.id
+    for metric in report.metrics:
+        if metric.evidence_id in identifiers:
+            metric.evidence_id = identifiers[metric.evidence_id]
     return report.model_copy(
         update={
             "task_id": task.id,
@@ -201,7 +214,9 @@ class SubAgent:
 
         try:
             system_prompt = load_profile(task.profile, self.project_root, policy=self.policy)
-            text = await react_loop(
+            if 'read_url' in tool_names:
+                system_prompt += '\n\n' + (Path(__file__).parent / 'source_reading.md').read_text(encoding='utf-8')
+            outcome = await react_loop_detailed(
                 client=self.client,
                 model=self.model,
                 system_prompt=system_prompt,
@@ -211,15 +226,26 @@ class SubAgent:
                 on_tool_call=_on_tool,
                 usage_tracker=local_usage,
                 budget=self.budget,
+                finalize_research=True,
             )
-            try:
-                report = _bind_report(task, parse_model_json(ResearchReport, text))
-            except ValidationError:
-                report = _fallback_report(task, text)
+            if not outcome.completed:
+                report = _budget_report(task, traces, outcome.stop_reason)
+            else:
+                try:
+                    report = _bind_report(task, parse_model_json(ResearchReport, outcome.text))
+                    if outcome.stop_reason == 'budget_finalized':
+                        report.status = 'partial'
+                        report.unanswered_questions.append('Research budget reached; remaining claims need further evidence.')
+                except ValidationError:
+                    report = _budget_report(task, traces, 'invalid_report_json')
         except asyncio.CancelledError:
             if traces:
                 append_traces(session_dir, traces)
             raise
+        except AgentDeadlineExceeded as exc:
+            if not traces:
+                raise
+            report = _budget_report(task, traces, str(exc))
         except AgentRuntimeError:
             if traces:
                 append_traces(session_dir, traces)
@@ -228,7 +254,25 @@ class SubAgent:
         if self.on_progress is not None:
             self.on_progress(task.id, tool_calls, local_usage.total_tokens)
 
+        report = ground_report(report, traces)
         persist_research_report(session_dir, task, report)
         if traces:
             append_traces(session_dir, traces)
         return AgentRunResult(report=report, usage=local_usage, tool_calls=tool_calls, traces=traces)
+
+
+def _budget_report(task: Task, traces: list[ToolTrace], reason: str) -> ResearchReport:
+    sources: list[str] = []
+    for trace in traces:
+        try:
+            payload = json.loads(trace.observation)
+        except ValueError:
+            continue
+        if not isinstance(payload, dict) or payload.get('status') != 'ok':
+            continue
+        urls = [payload.get('url')] + [s.get('url') for s in (payload.get('sources') or []) if isinstance(s, dict)]
+        sources.extend(u for u in urls if isinstance(u, str) and u.startswith('https://'))
+    return ResearchReport(task_id=task.id, title=task.title, agent_role=task.profile,
+        summary='Research could not complete a validated answer within its limits. Collected observations are retained; no new factual answer is asserted.',
+        status='partial' if traces else 'insufficient_evidence', sources=list(dict.fromkeys(sources)),
+        unanswered_questions=[task.assignment], limitations=[reason, 'Sources may be unverified leads; inspect saved traces and independent verification.'])

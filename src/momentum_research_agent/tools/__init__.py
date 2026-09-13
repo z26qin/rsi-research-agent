@@ -7,6 +7,7 @@ from momentum_research_agent.tools import (  # noqa: F401
     market_data,
     shell,
     web_search,
+    read_url,
 )
 from momentum_research_agent.tools.registry import (
     ToolContext,
@@ -22,15 +23,16 @@ DEFAULT_TOOLS = [
     "market_data",
     "web_search",
     "file_reader",
+    "read_url",
 ]
 
 PROFILE_TOOLS: dict[str, list[str]] = {
-    "momentum_analyst": ["engine_query", "market_data", "web_search", "file_reader"],
-    "credit_analyst": ["market_data", "web_search", "file_reader"],
-    "macro_analyst": ["market_data", "web_search", "file_reader"],
-    "flow_analyst": ["engine_query", "market_data", "web_search", "file_reader"],
-    "technicals_analyst": ["market_data", "web_search", "file_reader"],
-    "verifier": ["engine_query", "market_data", "web_search", "file_reader"],
+    "momentum_analyst": ["engine_query", "market_data", "web_search", "file_reader", "read_url"],
+    "credit_analyst": ["market_data", "web_search", "file_reader", "read_url"],
+    "macro_analyst": ["market_data", "web_search", "file_reader", "read_url"],
+    "flow_analyst": ["engine_query", "market_data", "web_search", "file_reader", "read_url"],
+    "technicals_analyst": ["market_data", "web_search", "file_reader", "read_url"],
+    "verifier": ["engine_query", "market_data", "web_search", "file_reader", "read_url"],
 }
 
 RESEARCH_PROFILES = frozenset(

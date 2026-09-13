@@ -1,5 +1,6 @@
 """Small behavioral suite for the daily-to-research handoff."""
 import asyncio
+import ast
 from copy import deepcopy
 from datetime import date
 import json
@@ -203,7 +204,7 @@ async def test_recheck_requires_valid_complete_evidence_verdicts(saved, tmp_path
                 payload = json.loads(message.content)
                 payload.update(status="complete", findings=[{"id": "e1", "claim": "Rates caused the move",
                     "category": "market_regime", "stance": "supporting",
-                    "source_url": "https://example.com/evidence", "confidence": "high"}])
+                            "source_url": "engine_query", "confidence": "high"}])
                 message.content = json.dumps(payload)
             elif failure == "timeout":
                 raise TimeoutError()
@@ -212,9 +213,12 @@ async def test_recheck_requires_valid_complete_evidence_verdicts(saved, tmp_path
             elif failure == "omitted":
                 message.content = json.dumps({"question": "q", "overall_status": "pass", "summary": "done", "verdicts": []})
             elif failure is None:
+                # The verifier must use the actual task-scoped ID it received.
+                prompt = kwargs['messages'][1]['content']
+                evidence_id = ast.literal_eval(prompt.split('Input JSON:\n',1)[1])['reports'][0]['findings'][0]['id']
                 message.content = json.dumps({"question": "q", "overall_status": "pass", "summary": "checked",
-                    "verdicts": [{"evidence_id": "e1", "claim": "Rates caused the move", "status": "verified",
-                                  "rechecked_source": "https://example.com/evidence"}]})
+                    "verdicts": [{"evidence_id": evidence_id, "claim": "Rates caused the move", "status": "verified",
+                                      "rechecked_source": "engine_query"}]})
             else:
                 response.choices[0].finish_reason = "tool_calls"
                 message.content = json.dumps({"question": "q", "overall_status": "pass", "summary": "done", "verdicts": []})

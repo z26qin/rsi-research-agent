@@ -164,8 +164,9 @@ class Coordinator:
         return await self.synthesize()
 
     async def decompose(self, question: str) -> list[Task]:
+        from momentum_research_agent.research_contract import source_catalog
         system_prompt = (PROMPTS_DIR / "decompose.md").read_text(encoding="utf-8")
-        user_message = f"Research question:\n\n{question}"
+        user_message = f"Research question:\n\n{question}" + source_catalog(question)
         brief = failure_brief(self.project_root)
         if brief:
             user_message = f"{user_message}\n\n{brief}"
@@ -447,7 +448,8 @@ class Coordinator:
             SynthesisReport,
             self.coordinator_model_name,
         )
-        report = raw.model_copy(update={"question": self.board.question, "timestamp": utcnow()})
+        metrics = [metric for task in completed if task.id in self.sub_reports for metric in self.sub_reports[task.id].metrics]
+        report = raw.model_copy(update={"question": self.board.question, "timestamp": utcnow(), 'metrics':metrics})
         save_text(self.session_dir / "synthesis.md", _render_synthesis_markdown(report))
         save_text(
             self.session_dir / "synthesis.json",
@@ -592,12 +594,18 @@ def _render_synthesis_markdown(report: SynthesisReport) -> str:
     ) or "_(none)_"
     signals = "\n".join(f"- {item}" for item in report.actionable_signals) or "- (none)"
     dissent = "\n".join(f"- {item}" for item in report.dissenting_views) or "- (none)"
+    metrics = '\n'.join(
+        f'- {m.name}: {m.value if m.value is not None else m.missing_reason} {m.unit}; '
+        f'as-of {m.as_of or "unknown"}; source {m.source_url or "unavailable"}; evidence {m.evidence_id or "none"}'
+        for m in report.metrics
+    ) or 'No structured numeric observations available; do not infer missing values from prose.'
     return (
         f"# Synthesis\n\n"
         f"**Question:** {report.question}\n\n"
         f"**Timestamp:** {report.timestamp.isoformat()}\n\n"
         f"**Confidence:** {report.confidence_level}\n\n"
         f"## Executive Summary\n\n{report.executive_summary}\n\n"
+        f"## Numeric Observations (not independently verified)\n\n{metrics}\n\n"
         f"## Analysis by Dimension\n\n{dimensions}\n\n"
         f"## Cross-Dimensional Risk Assessment\n\n{report.risk_assessment}\n\n"
         f"## Actionable Signals\n\n{signals}\n\n"

@@ -22,6 +22,7 @@ from momentum_research_agent.config import (
     load_env,
     make_client,
     reports_root,
+    resolve_model_alias,
     sub_agent_model,
 )
 from momentum_research_agent.coordinator.coordinator import (
@@ -90,9 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("question", nargs="?", help="Research question to investigate.")
     parser.add_argument(
         "--mode",
-        choices=("team", "single"),
-        default="team",
-        help="team = coordinator + sub-agents (default); single = one ReAct loop.",
+        choices=("auto", "team", "single"),
+        default="auto",
+        help="auto = factual lookup vs research rules; single = direct answer; team = deep research.",
     )
     parser.add_argument(
         "--session-dir",
@@ -286,7 +287,6 @@ async def run_single(
             tool_calls=result.tool_calls,
             tokens_used=result.usage.total_tokens,
         )
-        board.complete(task.id, result.report.summary)
         console.print(
             Panel(
                 Markdown(render_research_report_markdown(result.report)),
@@ -301,20 +301,16 @@ async def run_single(
             verbose=verbose,
             console=console,
         )
-        try:
-            verified = await verifier.run(question, [result.report], session_dir)
-            usage.extend(verified.usage)
-            console.print(
-                Panel(
-                    Markdown(render_verification_markdown(verified.report)),
-                    title="Verification",
-                    border_style="yellow",
-                )
+        verified = await verifier.run(question, [result.report], session_dir)
+        usage.extend(verified.usage)
+        console.print(
+            Panel(
+                Markdown(render_verification_markdown(verified.report)),
+                title="Verification",
+                border_style="yellow",
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            console.print(f"[red]Verifier failed:[/red] {exc}")
+        )
+        board.complete(task.id, result.report.summary)
     except Exception as exc:
         board.fail(task.id, str(exc), error_type=type(exc).__name__)
         raise
@@ -470,7 +466,7 @@ async def async_main(args: argparse.Namespace) -> int:
         outcome = await run_improvement_cycle(
             project_root,
             generator=LLMCandidateGenerator(
-                model=args.coordinator_model or coordinator_model()
+                model=resolve_model_alias(args.coordinator_model or coordinator_model())
             ),
             engine_results=engine_case_results(offline_results),
             provider=FileEvalCaseProvider(fixture_path),
@@ -523,7 +519,7 @@ async def async_main(args: argparse.Namespace) -> int:
         try:
             report, path = await run_live_compare(
                 client=client,
-                requested_model=args.model or sub_agent_model(),
+                requested_model=resolve_model_alias(args.model or sub_agent_model()),
                 project_root=project_root,
                 baseline_policy=baseline,
                 candidate_policy=candidate,
@@ -561,7 +557,8 @@ async def async_main(args: argparse.Namespace) -> int:
     (session_dir / "sub_reports").mkdir(exist_ok=True)
 
     model = args.model or sub_agent_model()
-    coord_model = args.coordinator_model or coordinator_model()
+    model = resolve_model_alias(model)
+    coord_model = resolve_model_alias(args.coordinator_model or coordinator_model())
     question = args.question or ""
 
     try:
@@ -575,6 +572,10 @@ async def async_main(args: argparse.Namespace) -> int:
         question = question or board.question
     else:
         board = None
+
+    if args.mode == 'auto':
+        from momentum_research_agent.research_contract import route_question
+        args.mode = route_question(question, 'auto')['mode']
 
     print_banner(
         console,

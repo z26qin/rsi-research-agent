@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def utcnow() -> datetime:
@@ -119,6 +119,26 @@ class Evidence(BaseModel):
     excerpt: str | None = None
     confidence: Literal["high", "medium", "low"] = "medium"
     agent_id: str | None = None
+    kind: Literal['research', 'retrieval'] = 'research'
+
+
+class NumericMetric(BaseModel):
+    name: str = Field(min_length=1)
+    value: float | None = Field(default=None, allow_inf_nan=False)
+    unit: str = Field(min_length=1)
+    as_of: date | None = None
+    source_url: str | None = None
+    evidence_id: str | None = None
+    missing_reason: str | None = None
+
+    @model_validator(mode='after')
+    def require_provenance(self):
+        if self.value is not None:
+            if not self.as_of or not self.evidence_id or not self.source_url or not self.source_url.startswith(('https://','http://')):
+                raise ValueError('Numeric values require observation date, source URL and evidence_id')
+        elif not self.missing_reason:
+            raise ValueError('Unavailable metrics require missing_reason, never substitute zero')
+        return self
 
 
 class ResearchReport(BaseModel):
@@ -127,9 +147,23 @@ class ResearchReport(BaseModel):
     agent_role: str
     findings: list[Evidence] = Field(default_factory=list)
     summary: str
+    as_of: date | None = None
+    sources: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
     unanswered_questions: list[str] = Field(default_factory=list)
     contradictions: list[str] = Field(default_factory=list)
     status: Literal["complete", "partial", "insufficient_evidence"] = "complete"
+    metrics: list[NumericMetric] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def bind_metrics(self):
+        evidence = {item.id:item for item in self.findings}
+        if len(evidence) != len(self.findings):
+            raise ValueError('Evidence IDs must be unique within a report')
+        for metric in self.metrics:
+            if metric.value is not None and (metric.evidence_id not in evidence or evidence[metric.evidence_id].source_url != metric.source_url):
+                raise ValueError('Metric must reference an Evidence item with the same source URL')
+        return self
 
 
 class SynthesisReport(BaseModel):
@@ -141,6 +175,7 @@ class SynthesisReport(BaseModel):
     confidence_level: str
     dissenting_views: list[str] = Field(default_factory=list)
     timestamp: datetime = Field(default_factory=utcnow)
+    metrics: list[NumericMetric] = Field(default_factory=list)
 
 
 class UsageEvent(BaseModel):
@@ -237,7 +272,7 @@ class ToolTrace(BaseModel):
     """One replayable engine_query or web_search call."""
 
     id: str = Field(default_factory=new_trace_id)
-    tool: Literal["engine_query", "web_search"]
+    tool: Literal["engine_query", "web_search", "read_url"]
     arguments: dict[str, Any] = Field(default_factory=dict)
     observation: str
     observation_sha256: str

@@ -3,7 +3,7 @@
 The existing authorized `web_search(query)` tool uses DeepSeek's Anthropic-format
 Messages API with server-side `web_search_20250305`. Research/coordinator chat endpoints remain
 unchanged; no framework, new agent, profile or authorization expansion is added.
-The search model is pinned by this implementation to `deepseek-v4-flash`, using
+The search model is pinned to `deepseek-flash` (the official V4.1 Flash API ID), using
 the existing OpenAI SDK's generic POST transport (`openai>=3.8.0`), not a new SDK
 or framework. Search uses the fixed official endpoint
 `https://api.deepseek.com/anthropic/v1/messages` with the same key; changing the
@@ -15,7 +15,7 @@ From the checkout containing this change:
 
 ```bash
 MOMENTUM_ENV_FILE=/Users/aaronqin/Desktop/ENV/.env \
-SUB_AGENT_MODEL=deepseek-v4-flash \
+SUB_AGENT_MODEL=deepseek-flash \
 uv run momentum-research-agent --daily-brief --brief-source etf-proxy \
   --with-market-research
 ```

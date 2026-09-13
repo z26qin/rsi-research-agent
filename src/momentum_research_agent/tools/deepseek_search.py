@@ -18,7 +18,7 @@ from momentum_research_agent.tools.registry import get_tool_context
 
 TIMEOUT_SECONDS = 20
 MAX_REQUESTS_PER_ROLE = 2
-MODEL = "deepseek-v4-flash"
+MODEL = "deepseek-flash"
 ENDPOINT = "https://api.deepseek.com/anthropic/v1/messages"
 
 
@@ -102,8 +102,9 @@ async def search(query: str) -> str:
     if ctx.session_dir is None:
         return json.dumps({**result, "reason": "A session directory is required for evidence retention"})
     if ctx.search_requests >= MAX_REQUESTS_PER_ROLE:
-        return json.dumps({**result, "reason": "Native search attempt budget exhausted"})
+        return json.dumps({**result, "reason": "Native search attempt budget exhausted", "budget_exhausted": True})
     ctx.search_requests += 1
+    result['budget_exhausted'] = ctx.search_requests >= MAX_REQUESTS_PER_ROLE
     directory = ctx.session_dir / "search_results"
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{uuid4().hex}.json"

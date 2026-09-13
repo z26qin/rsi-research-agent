@@ -49,6 +49,11 @@ def render_research_report_markdown(report: ResearchReport) -> str:
         f"- Role: `{report.agent_role}`\n"
         f"- Status: **{report.status}**\n\n"
         f"## Summary\n\n{report.summary}\n\n"
+        "## Numeric observations (not independently verified)\n\n"
+        + '\n'.join(f'- {m.name}: {m.value if m.value is not None else "unavailable"} {m.unit}; as-of {m.as_of or "unknown"}; {m.source_url or m.missing_reason}; evidence {m.evidence_id or "none"}' for m in report.metrics) + '\n\n' +
+        f"Data as-of: {report.as_of or 'unknown'}\n\n"
+        f"## Sources (not verification)\n\n{chr(10).join(report.sources) or '(none)'}\n\n"
+        f"## Limitations\n\n{chr(10).join(report.limitations) or '(none)'}\n\n"
         f"## Evidence\n\n{evidence}\n\n"
         f"## Contradictions\n\n{contradictions}\n\n"
         f"## Unanswered Questions\n\n{unanswered}\n"

@@ -33,12 +33,21 @@ export const EvidenceSchema = z.object({
   retrieved_at: z.string().optional(),
   agent_id: z.string().nullable().optional(),
 });
+export const MetricSchema = z.object({
+  name:z.string(), value:z.number().finite().nullable(), unit:z.string(),
+  as_of:z.string().nullable().optional(),source_url:z.string().nullable().optional(),
+  evidence_id:z.string().nullable().optional(),missing_reason:z.string().nullable().optional(),
+});
 export const ReportSchema = z.object({
   task_id: z.string(),
   title: z.string(),
   agent_role: z.string(),
   findings: z.array(EvidenceSchema),
   summary: z.string(),
+  as_of: z.string().nullable().optional(),
+  sources: z.array(z.string()).optional(),
+  limitations: z.array(z.string()).optional(),
+  metrics: z.array(MetricSchema).optional(),
   unanswered_questions: z.array(z.string()).default([]),
   contradictions: z.array(z.string()).default([]),
   status: z.enum(["complete", "partial", "insufficient_evidence"]),
@@ -74,6 +83,7 @@ export const VerificationSchema = z.object({
 export const SynthesisSchema = z.object({
   question: z.string(),
   executive_summary: z.string(),
+  metrics: z.array(MetricSchema).optional(),
   analysis_by_dimension: z.record(z.string(), z.string()),
   risk_assessment: z.string(),
   actionable_signals: z.array(z.string()),
@@ -83,7 +93,7 @@ export const SynthesisSchema = z.object({
 });
 export const TraceSchema = z.object({
   id: z.string(),
-  tool: z.enum(["engine_query", "web_search"]),
+  tool: z.enum(["engine_query", "web_search", "read_url"]),
   arguments: z.record(z.string(), z.unknown()),
   observation: z.string(),
   observation_sha256: z.string(),

@@ -19,6 +19,18 @@ it('keeps execution unavailable when the local service is offline', async () => 
   await screen.findByText(/Local control service is offline/);
   expect(screen.getByRole('button', {name: 'Run research'})).toBeDisabled();
 });
+it('distinguishes a finished process from an unanswered question and shows its route', async () => {
+  const request = {kind:'research',question:'MTUM holdings',mode:'auto',agents:1,confirmed:true,request_id:'coverage-run'};
+  vi.stubGlobal('fetch', async () => ({ok:true,json:async () => ({...status,jobs:[{
+    id:'job-coverage',artifact_id:'saved',request,state:'completed',message:'Process ended',scheduled:false,
+    created_at:status.checked_at,finished_at:status.checked_at,answer_status:'unanswered',
+    routing:{mode:'single',intent:'direct_answer',reason:'Factual lookup'}
+  }]})}));
+  mount();
+  expect(await screen.findByText('Process finished')).toBeVisible();
+  expect(screen.getByText('Answer coverage: Question unanswered')).toBeVisible();
+  expect(screen.getByText('Direct answer · Factual lookup')).toBeVisible();
+});
 it('requires explicit confirmation and sends only the approved research parameters', async () => {
   const writes: any[] = [];
   vi.stubGlobal('fetch', async (url: string, options?: RequestInit) => {
@@ -33,7 +45,7 @@ it('requires explicit confirmation and sends only the approved research paramete
   await user.click(screen.getByLabelText(/I authorize this research run/));
   await user.click(screen.getByRole('button', {name: 'Run research'}));
   await waitFor(() => expect(writes).toHaveLength(1));
-  expect(writes[0]).toMatchObject({kind: 'research', question: 'Explain the current risk', confirmed: true, mode: 'team', agents: 3});
+  expect(writes[0]).toMatchObject({kind: 'research', question: 'Explain the current risk', confirmed: true, mode: 'auto', agents: 1});
   expect(writes[0].request_id).toBeTruthy();
 });
 it('toggles the Toronto schedule without submitting a research job', async () => {

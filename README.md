@@ -4,6 +4,27 @@ Multi-agent investigation system for US equity momentum tail-risk. A coordinator
 
 This is an original, purpose-built orchestration layer. It sits on top of a deterministic momentum tail-risk engine (Daniel–Moskowitz risk state, FINRA/GDELT overlays, triggered evidence). `engine_query` runs `momentum-tail-risk-monitor` `run_mvp` via subprocess (`scripts/run_monitor.py`) when a monitor checkout or the vendored PIT pack is available. File snapshots and local DM cannot V_D pass. Labeled mock is fail-closed.
 
+## Frontend showcase
+
+The Momentum workspace brings research sessions, evidence, verification, and daily briefs into one interface. A three-column desktop layout pairs the research overview with an agent activity rail; session pages expose evidence and source details without losing context.
+
+**Research dashboard**
+
+![Momentum research dashboard with navigation, research updates, session overview, and agent activity](frontend/qa/dashboard-desktop.png)
+
+<details>
+<summary>Explore the evidence review interface</summary>
+
+Filter claims by stance, verdict, confidence, category, or analyst, then inspect the supporting source and independent verification separately.
+
+![Momentum evidence review with claim filters, evidence cards, and a source inspector](frontend/qa/evidence-desktop.png)
+
+</details>
+
+These implementation screenshots were captured in **Demo mode on September 8, 2026**. Research claims, verification badges, and activity are illustrative—not live market data or current agent status. Later Daily Brief and run-control additions are not pictured.
+
+[Frontend setup and features](frontend/README.md) · [Mobile layout](frontend/qa/home-390.png) · [Design and visual QA](frontend/design-qa.md)
+
 ## Architecture
 
 ```

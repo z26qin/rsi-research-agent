@@ -75,3 +75,15 @@ The configured Aug 14 historical CSV was unavailable to both, so all historical
 change values remain missing. Historical comparison arithmetic is tested on
 synthetic fixtures but not yet accepted against a real two-date pair. See
 [concentration execution review](docs/concentration-delivery-review.md).
+
+## Integration and risk checkpoint — 2026-09-15
+
+Merged and pushed useful metrics/verification work as 2055d43; 30 tests pass.
+A live risk run retained six independently checked metrics despite finalization
+timeout, but crowding/reversal interpretation remains incomplete. An actual-data
+offline comparison confirms timeout retention improves from zero to six metrics;
+a successful terminal-report binding guard is unchanged. This is not policy
+self-improvement. Seven actual failures were imported, all blocked on replay
+compatibility. Next: bounded archive replay for read_url/market_data, preserving
+hashes and unknown-call rejection, then a paired real-failure/real-success policy
+comparison. See [risk and improvement review](docs/risk-and-improvement-review.md).

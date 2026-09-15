@@ -1,0 +1,27 @@
+{
+  "world_id": "high_quality_contradiction",
+  "research_question": "Does the evidence support a systemic momentum unwind as of 2022-08-19, including material contrary evidence?",
+  "as_of": "2022-08-19",
+  "capability": "source_quality",
+  "capabilities": ["CONTRADICTION_SEARCH", "SOURCE_QUALITY", "CLAIM_WITHHOLDING"],
+  "allowed_profiles": ["momentum_analyst", "flow_analyst"],
+  "allowed_tools": ["web_search", "read_url", "engine_query"],
+  "engine_observation": {"risk_state": "normal", "momentum_return_5d": -0.031, "breadth": 0.38, "market_rebound_21d": 0.08},
+  "sources": [
+    {"url": "https://fixtures.invalid/contradiction/commentary", "title": "Desk commentary warns of momentum liquidation", "text": "A trading-desk note described violent selling in several popular momentum names and called the move systemic. The note supplied no universe-level breadth calculation.", "published_at": "2022-08-18T15:30:00Z", "quality": 0.55, "keywords": ["systemic liquidation", "momentum selling"]},
+    {"url": "https://fixtures.invalid/contradiction/data", "title": "Audited factor study finds narrow reversal", "text": "The audited universe showed reversal in only 38 percent of securities, below the study's systemic threshold. Sector-neutral momentum remained positive and the apparent loss was concentrated in two industries.", "published_at": "2022-08-19T21:00:00Z", "quality": 0.98, "keywords": ["audited breadth", "sector neutral", "contradiction"]},
+    {"url": "https://fixtures.invalid/contradiction/flows", "title": "Fund flows show selective de-risking", "text": "Reported selling was elevated in technology and consumer discretionary portfolios but neutral in the other measured sectors.", "published_at": "2022-08-19T17:00:00Z", "quality": 0.89, "keywords": ["fund flows", "selective derisking"]},
+    {"url": "https://fixtures.invalid/contradiction/distractor", "title": "Volatility curve changes shape", "text": "The volatility curve flattened ahead of a central-bank symposium.", "published_at": "2022-08-17T19:00:00Z", "quality": 0.82, "keywords": ["volatility"]}
+  ],
+  "hidden_facts": [
+    {"fact_id": "c_support", "source_url": "https://fixtures.invalid/contradiction/commentary", "quote": "A trading-desk note described violent selling in several popular momentum names and called the move systemic.", "claim": "Desk commentary characterized selling as systemic.", "stance": "supporting", "category": "crowded_positioning"},
+    {"fact_id": "c_contradiction", "source_url": "https://fixtures.invalid/contradiction/data", "quote": "The audited universe showed reversal in only 38 percent of securities, below the study's systemic threshold.", "claim": "High-quality breadth data contradicts a systemic unwind.", "stance": "contradicting", "category": "contradicting_evidence"},
+    {"fact_id": "c_sector", "source_url": "https://fixtures.invalid/contradiction/data", "quote": "Sector-neutral momentum remained positive and the apparent loss was concentrated in two industries.", "claim": "Sector-neutral evidence indicates a concentrated event.", "stance": "contradicting", "category": "contradicting_evidence"}
+  ],
+  "delivery_contract": "Seek and report high-quality contradictory evidence; do not infer systemic breadth from a few popular names.",
+  "provenance": "Synthetic fixture combining stylized desk commentary with fictional audited cross-sectional data; designed solely for capability evaluation.",
+  "guard": true,
+  "require_withholding": false,
+  "missing_evidence": [],
+  "contradiction_fact_ids": ["c_contradiction", "c_sector"]
+}

@@ -273,6 +273,12 @@ async def run(root: Path, project_root: Path, previous: Path | None = None, *, e
                 record_session_gaps(project_root, session, board.session_id, report_gaps=verification.gaps)
             except (OSError, ValueError, KeyError, TypeError):
                 result.reason += " Gap ledger persistence failed; session verification remains available for manual import."
+            try:
+                from momentum_research_agent.eval.capability_mining import mine_session
+
+                mine_session(session, project_root)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         _save(root, result, verification)
         if owned:
             try:

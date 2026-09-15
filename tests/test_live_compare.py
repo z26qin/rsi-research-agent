@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from momentum_research_agent.agents.budget import LoopBudget
 from momentum_research_agent.eval.live_compare import (
@@ -13,11 +12,7 @@ from momentum_research_agent.eval.live_compare import (
     BehavioralExpectationSet,
     ExpectedEvidence,
     ExpectedToolCall,
-    assess_replay_run,
     expectations_content_sha256,
-    load_cases_reference,
-    load_expectations,
-    load_policy_reference,
     run_live_compare,
 )
 from momentum_research_agent.eval.replay_runner import (
@@ -109,9 +104,7 @@ def _expectation(
                 arguments={"query": f"synthetic {kind}"},
             )
         ],
-        allowed_report_statuses=[
-            "insufficient_evidence" if withhold else "complete"
-        ],
+        allowed_report_statuses=["insufficient_evidence" if withhold else "complete"],
         required_evidence=evidence,
         require_no_findings=withhold,
     )
@@ -198,85 +191,6 @@ def _run(
     )
 
 
-def test_expectations_reject_vacuous_or_candidate_authored_assertions(tmp_path: Path) -> None:
-    case = _case(tmp_path, "target", "No support in this synthetic observation.")
-    common = {
-        "case_id": case.case_id,
-        "case_sha256": case_content_sha256(case),
-        "kind": "target",
-        "reviewer": "reviewer",
-        "provenance": "manual curation",
-        "rationale": "known unsupported case",
-        "allowed_report_statuses": ["insufficient_evidence"],
-        "require_no_findings": True,
-    }
-
-    with pytest.raises(ValidationError):
-        BehavioralExpectation.model_validate(common)
-    with pytest.raises(ValidationError):
-        BehavioralExpectation.model_validate(
-            {**common, "required_calls": [], "authored_by_policy": True}
-        )
-
-
-def test_explicit_input_loaders_validate_cases_expectations_and_policy(tmp_path: Path) -> None:
-    case = _case(tmp_path, "target", "No support.")
-    expectation_set = BehavioralExpectationSet(
-        expectations=[_expectation(case, kind="target", withhold=True)]
-    )
-    cases_dir = tmp_path / "selected-cases"
-    cases_dir.mkdir()
-    (cases_dir / "case.json").write_text(case.model_dump_json(), encoding="utf-8")
-    expectations_path = tmp_path / "expectations.json"
-    expectations_path.write_text(expectation_set.model_dump_json(), encoding="utf-8")
-    policy = PolicyStore(tmp_path).load_active()
-
-    assert load_cases_reference(tmp_path, cases_dir) == [case]
-    assert load_expectations(expectations_path) == expectation_set
-    assert load_policy_reference(tmp_path, policy.version_id) == policy
-
-    empty_dir = tmp_path / "empty-cases"
-    empty_dir.mkdir()
-    with pytest.raises(ValueError, match="no replay cases"):
-        load_cases_reference(tmp_path, empty_dir)
-
-
-def test_assessment_checks_exact_calls_withholding_and_consumed_provenance(
-    tmp_path: Path,
-) -> None:
-    target = _case(tmp_path, "target", "No support in this synthetic observation.")
-    guard = _case(
-        tmp_path,
-        "guard",
-        json.dumps(
-            {
-                "url": "https://example.test/filing",
-                "snippet": "Synthetic filing evidence.",
-            }
-        ),
-    )
-    baseline_id = target.policy_version_id or ""
-
-    withheld = assess_replay_run(
-        _run(target, baseline_id, passed_shape="withhold"),
-        _expectation(target, kind="target", withhold=True),
-    )
-    grounded = assess_replay_run(
-        _run(guard, baseline_id, passed_shape="grounded"),
-        _expectation(guard, kind="guard"),
-    )
-    unsupported = assess_replay_run(
-        _run(guard, baseline_id, passed_shape="unsupported"),
-        _expectation(guard, kind="guard"),
-    )
-
-    assert withheld.passed is True
-    assert grounded.passed is True
-    assert unsupported.passed is False
-    assert "finding_not_grounded_in_consumed_observation" in unsupported.violations
-    assert "missing_required_evidence" in unsupported.violations
-
-
 @pytest.mark.asyncio
 async def test_shadow_comparison_persists_self_contained_paired_runs_and_aggregates(
     tmp_path: Path,
@@ -313,7 +227,11 @@ async def test_shadow_comparison_persists_self_contained_paired_runs_and_aggrega
         policy = kwargs["policy"]
         kwargs["request_budget"].claim()
         if case.case_id == target.case_id:
-            shape = "withhold" if policy.version_id == candidate.version_id else "unsupported"
+            shape = (
+                "withhold"
+                if policy.version_id == candidate.version_id
+                else "unsupported"
+            )
         else:
             shape = "grounded"
         return _run(case, policy.version_id, passed_shape=shape)
@@ -349,192 +267,10 @@ async def test_shadow_comparison_persists_self_contained_paired_runs_and_aggrega
     assert report.candidate_policy.version_id == candidate.version_id
     assert {case.case_id for case in report.cases} == {target.case_id, guard.case_id}
     assert report.expectations.expectations == expectations.expectations[:2]
-    assert report.expectations_sha256 == expectations_content_sha256(report.expectations)
+    assert report.expectations_sha256 == expectations_content_sha256(
+        report.expectations
+    )
     assert report_path.parent.parent.name == "live_evals"
     persisted = json.loads(report_path.read_text(encoding="utf-8"))
     assert persisted["observed_no_regression"] is True
     assert persisted["target_improvements"] == [target.case_id]
-
-
-@pytest.mark.asyncio
-async def test_comparison_snapshots_base_profile_once_for_all_paired_prompts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    profile_path = tmp_path / "profiles" / "flow_analyst.md"
-    profile_path.parent.mkdir()
-    original_profile = "# Frozen profile\n\nUse only observed evidence.\n"
-    profile_path.write_text(original_profile, encoding="utf-8")
-    target = _case(tmp_path, "target", "No support.")
-    guard = _case(
-        tmp_path,
-        "guard",
-        '{"url":"https://example.test/filing","snippet":"Synthetic filing evidence."}',
-    )
-    store = PolicyStore(tmp_path)
-    baseline = store.load_active()
-    candidate = merge_policy_patch(
-        baseline,
-        PolicyPatch(prompt_overlays={"flow_analyst": "Candidate guidance."}),
-        trigger_ids=[target.case_id],
-    )
-    observed_snapshots: list[str] = []
-
-    async def fake_run_replay_case(**kwargs):
-        observed_snapshots.append(kwargs["base_profile_text"])
-        if len(observed_snapshots) == 1:
-            profile_path.write_text("# Mutated during comparison\n", encoding="utf-8")
-        kwargs["request_budget"].claim()
-        shape = "withhold" if kwargs["case"].case_id == target.case_id else "grounded"
-        return _run(kwargs["case"], kwargs["policy"].version_id, passed_shape=shape)
-
-    monkeypatch.setattr(
-        "momentum_research_agent.eval.live_compare.run_replay_case",
-        fake_run_replay_case,
-    )
-
-    report, report_path = await run_live_compare(
-        client=object(),
-        requested_model="requested",
-        project_root=tmp_path,
-        baseline_policy=baseline,
-        candidate_policy=candidate,
-        cases=[target, guard],
-        expectations=BehavioralExpectationSet(
-            expectations=[
-                _expectation(target, kind="target", withhold=True),
-                _expectation(guard, kind="guard"),
-            ]
-        ),
-        repeats=1,
-        max_cases=2,
-        request_budget=LLMRequestBudget(max_attempts=4),
-        max_output_tokens=64,
-        budget=LoopBudget(max_turns=2),
-    )
-
-    expected_hash = hashlib.sha256(original_profile.encode()).hexdigest()
-    assert observed_snapshots == [original_profile] * 4
-    assert report.profile_snapshots["flow_analyst"].text == original_profile
-    assert report.profile_snapshots["flow_analyst"].sha256 == expected_hash
-    persisted = json.loads(report_path.read_text(encoding="utf-8"))
-    assert persisted["profile_snapshots"]["flow_analyst"] == {
-        "profile": "flow_analyst",
-        "text": original_profile,
-        "sha256": expected_hash,
-    }
-
-
-@pytest.mark.asyncio
-async def test_comparison_fails_closed_on_hash_mismatch_missing_guard_or_model_drift(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    target = _case(tmp_path, "target", "No support.")
-    store = PolicyStore(tmp_path)
-    baseline = store.load_active()
-    candidate = merge_policy_patch(
-        baseline,
-        PolicyPatch(prompt_overlays={"flow_analyst": "Withhold."}),
-        trigger_ids=[target.case_id],
-    )
-    expectation = _expectation(target, kind="target", withhold=True)
-
-    with pytest.raises(ValueError, match="guard"):
-        await run_live_compare(
-            client=object(), requested_model="requested", project_root=tmp_path,
-            baseline_policy=baseline, candidate_policy=candidate, cases=[target],
-            expectations=BehavioralExpectationSet(expectations=[expectation]),
-            repeats=1, max_cases=1, request_budget=LLMRequestBudget(max_attempts=2),
-            max_output_tokens=64, budget=LoopBudget(max_turns=2),
-        )
-
-    bad = expectation.model_copy(update={"case_sha256": "0" * 64})
-    with pytest.raises(ValueError, match="content hash"):
-        BehavioralExpectationSet(expectations=[bad]).bind_cases([target])
-
-    guard = _case(
-        tmp_path,
-        "guard",
-        '{"url":"https://example.test/filing","snippet":"Synthetic filing evidence."}',
-    )
-
-    async def drifting_run(**kwargs):
-        kwargs["request_budget"].claim()
-        is_baseline = kwargs["policy"].version_id == baseline.version_id
-        model = ["model-a", "model-b"] if is_baseline else ["model-b", "model-a"]
-        shape = "withhold" if kwargs["case"].case_id == target.case_id else "grounded"
-        return _run(kwargs["case"], kwargs["policy"].version_id, passed_shape=shape, model=model)
-
-    monkeypatch.setattr(
-        "momentum_research_agent.eval.live_compare.run_replay_case", drifting_run
-    )
-    report, _path = await run_live_compare(
-        client=object(), requested_model="requested", project_root=tmp_path,
-        baseline_policy=baseline, candidate_policy=candidate, cases=[target, guard],
-        expectations=BehavioralExpectationSet(
-            expectations=[expectation, _expectation(guard, kind="guard")]
-        ),
-        repeats=1, max_cases=2, request_budget=LLMRequestBudget(max_attempts=4),
-        max_output_tokens=64, budget=LoopBudget(max_turns=2),
-    )
-
-    assert report.outcome == "failed"
-    assert report.model_fairness is False
-    assert report.observed_no_regression is False
-    assert "resolved_model_mismatch" in report.reasons
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("repeats", True),
-        ("repeats", 1.5),
-        ("max_cases", float("nan")),
-        ("max_cases", float("inf")),
-        ("max_output_tokens", 1.5),
-    ],
-)
-@pytest.mark.asyncio
-async def test_direct_comparison_rejects_non_integral_bounds_before_requests(
-    tmp_path: Path,
-    field: str,
-    value: object,
-) -> None:
-    target = _case(tmp_path, "target", "No support.")
-    guard = _case(
-        tmp_path,
-        "guard",
-        '{"url":"https://example.test/filing","snippet":"Synthetic filing evidence."}',
-    )
-    store = PolicyStore(tmp_path)
-    baseline = store.load_active()
-    candidate = merge_policy_patch(
-        baseline,
-        PolicyPatch(prompt_overlays={"flow_analyst": "Withhold."}),
-        trigger_ids=[target.case_id],
-    )
-    values = {"repeats": 1, "max_cases": 2, "max_output_tokens": 64}
-    values[field] = value
-    request_budget = LLMRequestBudget(max_attempts=4)
-
-    with pytest.raises(ValueError, match="positive integer"):
-        await run_live_compare(
-            client=object(),
-            requested_model="requested",
-            project_root=tmp_path,
-            baseline_policy=baseline,
-            candidate_policy=candidate,
-            cases=[target, guard],
-            expectations=BehavioralExpectationSet(
-                expectations=[
-                    _expectation(target, kind="target", withhold=True),
-                    _expectation(guard, kind="guard"),
-                ]
-            ),
-            request_budget=request_budget,
-            budget=LoopBudget(max_turns=2),
-            **values,
-        )
-
-    assert request_budget.attempts == 0

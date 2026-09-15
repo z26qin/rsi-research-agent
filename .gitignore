@@ -21,4 +21,4 @@ frontend/.vite/
 frontend/test-results/
 frontend/playwright-report/
 !reports/.gitkeep
-fixtures/engine/outputs/pipeline_runs/
+fixtures/engine/outputs/

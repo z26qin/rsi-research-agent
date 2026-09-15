@@ -134,6 +134,29 @@ Research policy is loaded and snapshotted once when a run starts. Resume uses th
 
 Rollback must use `PolicyStore.activate(prior_version_id)` so the target version and content hash are validated before the atomic pointer changes. Improvement cycles are serialized by `reports/policies/improvement.lock`; after an interruption, confirm no improvement process remains before manually deleting only that stale lock.
 
+## RSI research capability arena
+
+`--rsi-cycle` is one explicit improvement operation. It mines existing OPEN-gap
+capabilities, selects packaged hash-approved synthetic research worlds plus fixed
+guards, runs independent baseline/candidate ReAct research and a policy-independent
+verifier, then may activate at most one immutable policy under the existing
+improvement lock. Production sessions only mine bounded capability cases after
+final verification; they never invoke improvement automatically.
+
+World tools are evaluation adapters, not registered production tools. Hidden facts
+must stay in scoring; neither research nor verifier prompts receive them. Frozen
+engine observations are simulation-only. The separate pinned offline engine guard
+suite must pass before promotion. Preserve all per-world guard vetoes, terminal
+verification, full-sentence grounding, requested/resolved model fairness, shared
+run budgets and session snapshot isolation. Policy patches cannot copy fixture
+answers or source leads into the candidate prompt.
+
+Artifacts live in `reports/rsi_experiments/`; mined occurrences live in
+`reports/capability_cases/`. Pending world candidates cannot approve themselves.
+`--replay-rsi` audits sealed observations, scores and decisions without model calls
+or activation. Scripted transport integration tests are not proof of live-model
+autonomous improvement. See `docs/rsi-arena.md` for the contract and limits.
+
 ## Tool authorization (fail closed)
 
 ```
@@ -174,6 +197,10 @@ Do not add a profile to `DEFAULT_TOOLS` as a fallback. `DEFAULT_TOOLS` is docume
 4. Unknown names fail closed. Do **not** add `verifier` to the decompose list; it is invoked only by the Coordinator after research completes.
 
 ## Tests
+
+Keep the maintained suite to at most 30 collected pytest cases across this
+repository. Prefer essential behavior and regression coverage; replace a
+lower-value case when adding one. See `tests/README.md` for retained coverage.
 
 ```bash
 uv sync --group dev

@@ -123,6 +123,7 @@ class Coordinator:
         await self.verify()
         if await self.follow_up():
             await self.verify()
+        self.record_capability_cases()
         return await self.synthesize()
 
     async def resume(self) -> SynthesisReport:
@@ -154,6 +155,7 @@ class Coordinator:
         json_path = self.session_dir / "synthesis.json"
         session_complete = (json_path.exists() or synthesis_path.exists()) and not ran_dispatch
         if session_complete:
+            self.record_capability_cases()
             if json_path.exists():
                 return SynthesisReport.model_validate_json(
                     json_path.read_text(encoding="utf-8")
@@ -161,6 +163,7 @@ class Coordinator:
             return parse_model_json(SynthesisReport, synthesis_path.read_text(encoding="utf-8"))
         if await self.follow_up():
             await self.verify()
+        self.record_capability_cases()
         return await self.synthesize()
 
     async def decompose(self, question: str) -> list[Task]:
@@ -302,6 +305,16 @@ class Coordinator:
             self.board.session_id,
             report_gaps=gaps,
         )
+
+    def record_capability_cases(self) -> list[object]:
+        """Mine bounded evaluation cases without affecting session delivery."""
+        from momentum_research_agent.eval.capability_mining import mine_session
+
+        try:
+            return list(mine_session(self.session_dir, self.project_root))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.console.print(f"[yellow]Capability case mining skipped:[/yellow] {exc}")
+            return []
 
     def resolve_planted_gaps(self) -> None:
         """Mark this session's planted rows CLOSED or OPEN from verification."""

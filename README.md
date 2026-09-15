@@ -131,6 +131,7 @@ Peak hours: Monday–Friday, **01:00–04:00 and 06:00–10:00 UTC**; all other 
 - [ETF brief and replay](docs/etf-proxy-brief.md) · [Five-question market brief](docs/market-research-brief.md)
 - [Crowding indicators](docs/crowding-indicators.md) · [Historical imports](docs/historical-crowding.md) · [Fixed-basket comparisons](docs/fixed-basket.md)
 - [Policy evaluation experiments](docs/feedback-experiment.md) · [Architecture and contributor rules](AGENTS.md)
+- [RSI frozen research arena, promotion and replay](docs/rsi-arena.md)
 
 ```bash
 uv run pytest

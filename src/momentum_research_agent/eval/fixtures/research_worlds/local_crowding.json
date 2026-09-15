@@ -1,0 +1,27 @@
+{
+  "world_id": "local_crowding",
+  "research_question": "Is the observed unwind a broad recovery momentum crash or a local crowded-positioning event as of 2021-02-05?",
+  "as_of": "2021-02-05",
+  "capability": "crowding",
+  "capabilities": ["CROWDING_CONFIRMATION", "CLAIM_WITHHOLDING", "ENGINE_GROUNDING"],
+  "allowed_profiles": ["flow_analyst", "momentum_analyst"],
+  "allowed_tools": ["web_search", "read_url", "engine_query"],
+  "engine_observation": {"risk_state": "normal", "market_drawdown_63d": -0.01, "market_rebound_21d": 0.03, "momentum_return_5d": -0.012, "breadth": 0.19},
+  "sources": [
+    {"url": "https://fixtures.invalid/local/prime", "title": "Crowded shorts squeeze in a narrow basket", "text": "Prime-broker data showed exceptional covering in a small basket of heavily shorted stocks. The covering was concentrated and did not extend across the broad prior-loser portfolio.", "published_at": "2021-02-04T21:00:00Z", "quality": 0.93, "keywords": ["short covering", "crowding", "narrow basket"]},
+    {"url": "https://fixtures.invalid/local/factor", "title": "Broad momentum factor remains orderly", "text": "The diversified momentum factor declined 1.2 percent over five sessions, within its ordinary historical range. Cross-sectional reversal breadth measured only 19 percent.", "published_at": "2021-02-05T18:00:00Z", "quality": 0.94, "keywords": ["momentum factor", "breadth", "local unwind"]},
+    {"url": "https://fixtures.invalid/local/market", "title": "Market regime stays near highs", "text": "The broad index was near its prior peak and had not entered a bear-market drawdown. Its latest monthly gain was three percent rather than an abrupt recovery surge.", "published_at": "2021-02-05T20:00:00Z", "quality": 0.9, "keywords": ["market regime", "drawdown", "recovery"]},
+    {"url": "https://fixtures.invalid/local/distractor", "title": "Options volume reaches a record", "text": "Aggregate options volume reached a record, led by contracts in a handful of retail favorites.", "published_at": "2021-02-03T14:00:00Z", "quality": 0.68, "keywords": ["options volume"]}
+  ],
+  "hidden_facts": [
+    {"fact_id": "b_local", "source_url": "https://fixtures.invalid/local/prime", "quote": "The covering was concentrated and did not extend across the broad prior-loser portfolio.", "claim": "Short covering was concentrated rather than broad.", "stance": "supporting", "category": "crowded_positioning"},
+    {"fact_id": "b_factor", "source_url": "https://fixtures.invalid/local/factor", "quote": "The diversified momentum factor declined 1.2 percent over five sessions, within its ordinary historical range.", "claim": "Broad momentum losses remained within an ordinary range.", "stance": "contradicting", "category": "contradicting_evidence"},
+    {"fact_id": "b_regime", "source_url": "https://fixtures.invalid/local/market", "quote": "The broad index was near its prior peak and had not entered a bear-market drawdown.", "claim": "The bear-market precondition for a recovery crash was absent.", "stance": "contradicting", "category": "market_regime"}
+  ],
+  "delivery_contract": "Classify local crowding separately from a broad recovery crash and cite breadth and regime evidence.",
+  "provenance": "Synthetic fixture inspired by historical concentrated short-squeeze episodes; all entities and measurements are fictional and are not current-market claims.",
+  "guard": true,
+  "require_withholding": false,
+  "missing_evidence": [],
+  "contradiction_fact_ids": ["b_factor", "b_regime"]
+}

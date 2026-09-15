@@ -1,0 +1,25 @@
+{
+  "world_id": "incomplete_withholding",
+  "research_question": "Can a broad momentum crash be concluded from the available frozen evidence as of 2023-03-17?",
+  "as_of": "2023-03-17",
+  "capability": "unwind_crash",
+  "capabilities": ["CLAIM_WITHHOLDING", "SOURCE_DISCOVERY", "AS_OF_DISCIPLINE"],
+  "allowed_profiles": ["momentum_analyst", "flow_analyst"],
+  "allowed_tools": ["web_search", "read_url", "engine_query"],
+  "engine_observation": {"risk_state": "normal", "momentum_return_5d": -0.021, "market_rebound_21d": null, "loser_beta_spread": null, "breadth": null},
+  "sources": [
+    {"url": "https://fixtures.invalid/incomplete/returns", "title": "Momentum sleeve records a weekly loss", "text": "One proprietary momentum sleeve lost 2.1 percent during the week. The release did not provide holdings, benchmark, factor-neutral returns, or cross-sectional breadth.", "published_at": "2023-03-17T20:00:00Z", "quality": 0.74, "keywords": ["momentum loss", "missing breadth"]},
+    {"url": "https://fixtures.invalid/incomplete/anecdote", "title": "Managers mention difficult tape", "text": "Two managers described abrupt reversals in positions, but neither disclosed the portfolio universe or loser-beta exposure.", "published_at": "2023-03-16T13:00:00Z", "quality": 0.52, "keywords": ["position reversals", "anecdote"]},
+    {"url": "https://fixtures.invalid/incomplete/calendar", "title": "Economic release calendar", "text": "The next inflation release is scheduled for the following month.", "published_at": "2023-03-15T09:00:00Z", "quality": 0.9, "keywords": ["calendar"]}
+  ],
+  "hidden_facts": [
+    {"fact_id": "d_loss", "source_url": "https://fixtures.invalid/incomplete/returns", "quote": "One proprietary momentum sleeve lost 2.1 percent during the week.", "claim": "A single proprietary sleeve reported a weekly loss.", "stance": "neutral", "category": "other"},
+    {"fact_id": "d_limits", "source_url": "https://fixtures.invalid/incomplete/returns", "quote": "The release did not provide holdings, benchmark, factor-neutral returns, or cross-sectional breadth.", "claim": "The available return report lacks the data needed to establish a broad factor event.", "stance": "contradicting", "category": "contradicting_evidence"}
+  ],
+  "delivery_contract": "Withhold a broad-crash conclusion and state the missing regime, breadth, and loser-beta evidence.",
+  "provenance": "Entirely synthetic incomplete-information guard fixture; the dates and measurements are fictional and make no current-market claim.",
+  "guard": true,
+  "require_withholding": true,
+  "missing_evidence": ["broad cross-sectional reversal breadth", "preceding bear-market drawdown and rebound", "prior-loser versus winner beta spread"],
+  "contradiction_fact_ids": ["d_limits"]
+}

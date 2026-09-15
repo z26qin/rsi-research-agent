@@ -167,6 +167,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the layered offline suite and attempt one constrained policy promotion.",
     )
+    commands.add_argument('--rsi-cycle', action='store_true',
+        help='Run one frozen autonomous research capability cycle; may promote one policy.')
+    commands.add_argument('--replay-rsi', type=Path,
+        help='Audit a saved RSI experiment offline without model calls or promotion.')
+    parser.add_argument('--max-tool-calls', type=_positive_int, default=32,
+        help='RSI tool-call ceiling per world/variant, including verifier.')
+    parser.add_argument('--max-total-tokens', type=_positive_int, default=250000,
+        help='RSI conservative input/output token reservation per world/variant.')
     commands.add_argument(
         "--import-session",
         type=Path,
@@ -451,6 +459,46 @@ async def async_main(args: argparse.Namespace) -> int:
             return 1
         console.print("[green]eval passed (live run_mvp V_D)[/green]")
         return 0
+
+    if getattr(args, 'replay_rsi', None):
+        from momentum_research_agent.eval.rsi_cycle import replay_experiment
+        try:
+            decision = replay_experiment(args.replay_rsi)
+        except (OSError, ValueError, KeyError) as exc:
+            console.print(f'[red]RSI replay failed:[/red] {exc}')
+            return 1
+        console.print(f'RSI replay matched saved decision: promote={decision.promote}')
+        return 0
+
+    if getattr(args, 'rsi_cycle', False):
+        from momentum_research_agent.eval.research_arena import ArenaControls
+        from momentum_research_agent.eval.rsi_cycle import run_rsi_cycle
+        try:
+            controls = ArenaControls(max_turns=args.max_turns,max_llm_requests=args.max_llm_calls,
+                max_output_tokens=args.max_output_tokens,max_total_tokens=args.max_total_tokens,
+                max_tool_calls=args.max_tool_calls,overall_deadline_s=args.overall_deadline_s,
+                llm_timeout_s=args.llm_timeout_s,tool_timeout_s=args.tool_timeout_s,
+                max_schema_repairs=1)
+            console.print(f'RSI bounds per world/variant: {controls.max_llm_requests} requests, '
+                f'{controls.max_tool_calls} tools, {controls.max_total_tokens:,} reserved tokens, '
+                f'{controls.overall_deadline_s:g}s; at most four approved worlds, one candidate, one promotion.')
+            load_env(project_root)
+            client = make_client()
+        except (ValueError, RuntimeError) as exc:
+            console.print(f'[red]{exc}[/red]')
+            return 2
+        try:
+            outcome = await run_rsi_cycle(project_root,client=client,
+                requested_model=resolve_model_alias(args.model or sub_agent_model()),controls=controls,
+                generator=LLMCandidateGenerator(client=client,
+                    model=resolve_model_alias(args.coordinator_model or coordinator_model()),
+                    timeout_s=controls.llm_timeout_s,max_output_tokens=controls.max_output_tokens))
+        finally:
+            await client.close()
+        console.print(f'RSI {outcome.status}: {outcome.experiment_dir}')
+        for reason in outcome.reasons:
+            console.print(reason)
+        return 0 if outcome.status in {'promoted','no_change'} else 1
 
     if getattr(args, "improve", False):
         load_env(project_root)

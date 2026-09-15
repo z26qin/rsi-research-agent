@@ -1,0 +1,27 @@
+{
+  "world_id": "recovery_risk",
+  "research_question": "Does the frozen evidence indicate a broad momentum recovery-crash setup as of 2020-06-12?",
+  "as_of": "2020-06-12",
+  "capability": "unwind_crash",
+  "capabilities": ["SOURCE_DISCOVERY", "ENGINE_GROUNDING", "AS_OF_DISCIPLINE"],
+  "allowed_profiles": ["momentum_analyst", "flow_analyst"],
+  "allowed_tools": ["web_search", "read_url", "engine_query"],
+  "engine_observation": {"risk_state": "bear_low_volatility", "market_drawdown_63d": -0.18, "market_rebound_21d": 0.24, "loser_beta_spread": 0.71, "momentum_return_5d": -0.083},
+  "sources": [
+    {"url": "https://fixtures.invalid/recovery/regime", "title": "Sharp rebound follows deep market decline", "text": "The broad market remained 18 percent below its prior peak while gaining 24 percent over the latest month. Recent losers carried materially higher market beta than recent winners.", "published_at": "2020-06-12T16:00:00Z", "quality": 0.95, "keywords": ["bear market", "rebound", "loser beta", "momentum crash"]},
+    {"url": "https://fixtures.invalid/recovery/factor", "title": "Momentum reverses during recovery", "text": "The long-short momentum factor lost 8.3 percent in five sessions as the highest-beta prior losers outperformed. The reversal was broad across the large-cap and mid-cap universes.", "published_at": "2020-06-11T20:00:00Z", "quality": 0.92, "keywords": ["momentum reversal", "prior losers", "broad recovery"]},
+    {"url": "https://fixtures.invalid/recovery/history", "title": "Historical recovery-risk mechanism", "text": "Historical research links momentum crashes to panic states followed by abrupt rebounds, when embedded short positions in high-beta losers rally sharply.", "published_at": "2016-03-01T00:00:00Z", "quality": 0.88, "keywords": ["Daniel Moskowitz", "panic", "recovery"]},
+    {"url": "https://fixtures.invalid/recovery/distractor", "title": "Quarterly index rebalance calendar", "text": "The index provider scheduled its routine quarterly rebalance after the close next Friday.", "published_at": "2020-06-10T12:00:00Z", "quality": 0.8, "keywords": ["index rebalance"]}
+  ],
+  "hidden_facts": [
+    {"fact_id": "a_regime", "source_url": "https://fixtures.invalid/recovery/regime", "quote": "The broad market remained 18 percent below its prior peak while gaining 24 percent over the latest month.", "claim": "A deep drawdown was followed by a sharp broad-market rebound.", "stance": "supporting", "category": "market_regime"},
+    {"fact_id": "a_beta", "source_url": "https://fixtures.invalid/recovery/regime", "quote": "Recent losers carried materially higher market beta than recent winners.", "claim": "Prior losers had materially higher beta than winners.", "stance": "supporting", "category": "market_regime"},
+    {"fact_id": "a_reversal", "source_url": "https://fixtures.invalid/recovery/factor", "quote": "The long-short momentum factor lost 8.3 percent in five sessions as the highest-beta prior losers outperformed.", "claim": "Momentum reversed sharply as high-beta losers outperformed.", "stance": "supporting", "category": "market_regime"}
+  ],
+  "delivery_contract": "Evaluate only the frozen as-of date; distinguish the historical mechanism from live delivery and cite inspected documents.",
+  "provenance": "Synthetic fixture inspired by published historical recovery-risk concepts and stylized 2020-like dynamics; it makes no claim about current markets.",
+  "guard": false,
+  "require_withholding": false,
+  "missing_evidence": [],
+  "contradiction_fact_ids": []
+}

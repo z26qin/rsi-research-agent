@@ -51,9 +51,10 @@ from momentum_research_agent.eval.policy_improver import (
 )
 from momentum_research_agent.eval.policy_suite import FileEvalCaseProvider
 from momentum_research_agent.models.schemas import Task, UsageSummary, new_session_id
+from momentum_research_agent.research_contract import is_holdings_lookup
 from momentum_research_agent.state.policies import PolicyStore
 from momentum_research_agent.state.reports import (
-    render_research_report_markdown,
+    render_answer_markdown,
     render_verification_markdown,
 )
 from momentum_research_agent.tools.engine_pipeline import bundled_engine_root
@@ -288,19 +289,13 @@ async def run_single(
         policy=load_or_snapshot_policy(session_dir, project_root),
     )
     try:
-        result = await agent.run(task, None, session_dir)
+        requested_tools = ["web_search", "read_url"] if is_holdings_lookup(question) else None
+        result = await agent.run(task, requested_tools, session_dir)
         usage.extend(result.usage)
         board.record_usage(
             task.id,
             tool_calls=result.tool_calls,
             tokens_used=result.usage.total_tokens,
-        )
-        console.print(
-            Panel(
-                Markdown(render_research_report_markdown(result.report)),
-                title="Research report",
-                border_style="green",
-            )
         )
         verifier = Verifier(
             client=client,
@@ -311,6 +306,9 @@ async def run_single(
         )
         verified = await verifier.run(question, [result.report], session_dir)
         usage.extend(verified.usage)
+        answer = render_answer_markdown(result.report, verified.report)
+        (session_dir / "answer.md").write_text(answer, encoding="utf-8")
+        console.print(Panel(Markdown(answer), title="Research answer", border_style="green"))
         console.print(
             Panel(
                 Markdown(render_verification_markdown(verified.report)),

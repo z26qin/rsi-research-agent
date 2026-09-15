@@ -272,7 +272,7 @@ class ToolTrace(BaseModel):
     """One replayable engine_query or web_search call."""
 
     id: str = Field(default_factory=new_trace_id)
-    tool: Literal["engine_query", "web_search", "read_url"]
+    tool: Literal["engine_query", "web_search", "read_url", "market_data"]
     arguments: dict[str, Any] = Field(default_factory=dict)
     observation: str
     observation_sha256: str

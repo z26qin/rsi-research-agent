@@ -34,12 +34,130 @@ The configured MTUM/QUAL/IVV issuer directory is supplied to the LLM using exist
 - `source_reads/{unique}.json` stores fetch time, requested/final URL, body and text. Tool results reference its SHA-256; `read_url` traces retain the bounded text for offline stored-observation replay. This is not a new live replay provider: unsupported calls in policy shadow evaluation still fail closed.
 - Deadline or malformed/truncated final output after collecting observations yields a deterministic partial report with sources and gaps, no invented findings. Cancellation and authorization failures are not converted into success. Existing verifier conservatism is unchanged; reading a page does not automatically verify it.
 
-For this initial reader release, source-derived web claims (including redirect destinations and download links) remain `unchecked` under the deterministic verifier guard. The LLM may report the observed facts, but a successfully downloaded page is not a verified-claim badge. No verification checks are relaxed to make a run look successful.
+The existing deterministic verifier guard requires a successful independent verifier source read for source-derived web claims. Researcher retrieval alone does not confer verification. Native discovery remains subject to its existing conservative guard. This M1 change does not relax or modify either guard. See the static-fallback limitation below; a saved status alone is not proof that independent re-check completed.
 
 The runtime tool contract is in `agents/source_reading.md`, applied only to researchers authorized for `read_url`; frozen profiles and policy snapshots are unchanged. No self-improvement promotion, daily-brief budget increase, or additional framework is involved.
 
 ## Testing
 
-Offline tests use recorded HTTP/model responses, including exhausted search, interrupted finalization, preserved source artifacts, private-address/redirect rejection, and frontend legacy compatibility. They make no paid LLM calls.
+The maintained 30-case suite uses local HTTP/model doubles and pinned engine fixtures. It retains authorization, deadlines/cancellation, independent source reading, discovery provenance and useful-answer regressions. See `tests/README.md` for the retained coverage and deliberate omissions. Tests make no paid LLM calls.
 
 For a manually approved live test, ask: “What are MTUM's top 10 holdings? Read an official source; include weights and the actual observation date. If unavailable, explain the missing evidence.” Inspect the answer, Evidence, Verification and Trace tabs. A truthful partial result is expected when the issuer blocks access; it is not proof that the holdings question was answered.
+
+## Useful holdings answers (M1)
+
+For a narrowly recognized English holdings lookup, Single offers the researcher
+only its existing `read_url` and `web_search` tools. Unknown vocabulary or mixed
+requests retain the full profile. This conservative heuristic is a scope hint,
+not a semantic classifier. The shared source-reading contract asks for one
+holding per Evidence/metric, original fund weights, actual data dates and a
+source-supported ranking. It does not contain live holdings or weights.
+
+Single writes `answer.md` after independent verification and displays that answer
+instead of the unchecked draft summary. The answer retains numeric observations,
+verdict-labelled findings and caveats. Rejected values/claims are withheld;
+weak/unchecked observations remain explicitly labelled. The summary is still
+preserved in the canonical sub-report, but can mix unsupported calculations and
+is not reused as the final answer. Metrics are not separately recalculated by
+this renderer. Team and frontend rendering are unchanged.
+
+```bash
+uv run momentum-research-agent --mode single \
+  --session-dir reports/my-mtum-lookup \
+  "What are MTUM's top 10 holdings? Read source content and include weights, the actual observation date, and source links. State any missing evidence."
+```
+
+Use a fresh session directory for each run. This command makes live model/data
+requests using existing configuration and budgets. Inspect `answer.md`,
+`sub_reports/*.json`, `verification.json` and archived `source_reads/` together.
+
+A saved `verified` verdict without `rechecked_source` is displayed as unconfirmed:
+the existing static fallback may retain that status after a verifier timeout.
+This presentation safeguard leaves canonical verification unchanged and is not
+proof of independent verification completion. See [M1 execution review](m1-usefulness-review.md).
+
+## Independent verifier failure semantics
+
+Timeout, malformed output or another bounded runtime failure now merges an empty
+independent result: every evidence item without a terminal verdict becomes
+`unchecked`, while deterministic `rejected` verdicts remain rejected. The same
+rule applies to omitted IDs in otherwise valid verifier JSON. Reading a source
+before timing out cannot retain a static `verified` verdict. The resulting gaps
+are persisted through the existing ledger path; cancellation still propagates.
+Old saved sessions are unchanged, so the conservative presentation guard remains
+for their static-only statuses. A timeout is truthfully reported, not retried with
+larger budgets or converted into research success.
+
+## Daily performance observations
+
+`market_data(ticker="MTUM", benchmark="SPY")` now returns deterministic JSON for
+daily prices: return, sample annualized volatility and within-window maximum
+drawdown for each ticker. The optional benchmark uses exactly the same 20 common
+completed-session closes (19 returns). An internally missing session, fewer than
+20 prices, duplicate date, nonfinite/nonpositive price or unavailable symbol
+produces `unavailable`, not a shorter sample or zero. Current calendar-day data
+is excluded conservatively; the last returned date is not a freshness guarantee.
+Non-daily single-ticker calls retain the recent-price Markdown format; benchmark
+comparisons require daily data. Daily consumers must use the new JSON contract.
+
+`market_observations/<id>.json` archives the full-precision prices used, dates,
+provider/adjustment basis, formulas and results. The tool returns its relative path
+and SHA-256 alongside compact metrics. `traces.jsonl` now includes `market_data`;
+this is source-observation retention, not a second tool log. Paired policy shadow
+evaluation still rejects market_data: its accepted replay tools are unchanged.
+
+The shared research contract directs performance-only comparisons to one combined
+price call and prompt completion. Existing research deadlines/turns are unchanged.
+If finalization times out or is invalid, only the latest successful hash-matching
+performance archive may supply deterministic Evidence/metrics. That answer stays
+partial with interpretation and the assignment unresolved; it is not a fabricated
+LLM completion. A changed, missing or out-of-session archive is refused.
+
+A syntactically complete report with broken metric evidence references may retain
+its otherwise valid findings/metrics: only mismatched references are withheld,
+coverage becomes partial, the mixed summary is suppressed and the gaps are named.
+No source link is invented, no metric value is repaired, and other schema errors
+still reject. `finalizations/<task-id>.json` preserves terminal model text and
+validation diagnostics separately from canonical sub-reports. Treat this draft
+as untrusted model output, not verified research.
+
+The verifier still independently judges evidence, with source reads required for
+web/vendor claims and UNCHECKED on missing terminal verdicts. A successful
+independent market_data call can support a vendor calculation, but does not
+establish third-party price accuracy or current positioning/crowding.
+
+## Official holdings concentration
+
+`read_url` adds deterministic `holdings_summary` for a recognized configured
+issuer CSV. It parses the full archived response body, validates fund identity,
+observed date and weight coverage through the existing normalizer, and returns
+original fund-weight top10/sector percentages plus the largest listing. Individual
+holding weights remain fractions, explicitly labelled. Generic page reads retain
+their original content and status even when concentration cannot be computed.
+
+To compare, first read the earlier dated CSV. Then call read_url on the newer
+CSV with `compare_to_artifact` and `compare_to_sha256` from the earlier response.
+Only a hash-matching source_reads archive inside the same session is accepted.
+Both files must identify the same fund with strictly increasing dates. If a URL
+requests asOfDate, it must exactly match the CSV header. Date mismatches, missing
+history or changed listing identity yield an unavailable comparison and null
+`top10_change_pp`; the current concentration remains usable.
+
+`holdings_comparison` contains top10 change in percentage points, largest holdings,
+sector-weight changes and contributions of the union of the two top10 lists.
+For each listing, contribution = its weight in the new top10 (zero outside) minus
+its weight in the old top10 (zero outside). This reconciles to total top10 change;
+entry into the top10 does not establish a new fund holding or a purchase.
+Share classes remain separate and there is no causal trade/flow attribution.
+
+Research source hints include existing configured exact-date history URLs when
+explicit dates and historical/concentration intent occur in the question. These
+are addresses to try, not availability guarantees or historical observations.
+The source-reading limits, timeouts and profile authorization are unchanged.
+Only current facts are reported when history cannot be retrieved.
+
+On finalization failure, valid hash-bound holdings archives can retain calculated
+metrics as a partial report. The model explanation remains incomplete. The usual
+independent verifier still judges these claims; source download or deterministic
+calculation is not automatic verification. This does not certify publication-time
+availability or market-wide crowding.

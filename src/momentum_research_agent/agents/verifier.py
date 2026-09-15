@@ -60,6 +60,17 @@ def _guard_source_discovery(report: VerificationReport, reports: list[ResearchRe
                 if trace.agent_role == VERIFIER_PROFILE and content.get('status') == 'ok':
                     verifier_reads.update({key(requested), key(content.get('url')), key(content.get('requested_url'))} - {''})
             continue
+        if trace.tool == 'market_data':
+            try:
+                payload = json.loads(trace.observation)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict) and payload.get('schema') == 'daily_performance_v1' and payload.get('status') == 'ok':
+                urls = {key(s.get('url')) for s in payload.get('sources', []) if isinstance(s, dict)}
+                discovered_urls.update(urls)
+                if trace.agent_role == VERIFIER_PROFILE:
+                    verifier_reads.update(urls)
+            continue
         if trace.tool != "web_search":
             continue
         try:
@@ -232,16 +243,18 @@ class Verifier:
                 append_traces(session_dir, traces)
             raise
         except (AgentRuntimeError, ValidationError, ValueError) as exc:
-            report = static.model_copy(
-                update={
-                    "summary": (
-                        f"{static.summary} LLM re-check failed ({type(exc).__name__}: {exc}); "
-                        "static audit retained."
+            report = merge_verification(
+                static,
+                VerificationReport(
+                    question=question,
+                    overall_status="fail",
+                    summary=(
+                        f"Independent re-check failed ({type(exc).__name__}); "
+                        "evidence without a terminal verdict remains unchecked. "
+                        "Static rejections are retained."
                     ),
-                    "overall_status": (
-                        "pass_with_caveats" if static.overall_status == "pass" else static.overall_status
-                    ),
-                }
+                ),
+                question,
             )
 
         compiled = _persist(report)

@@ -27,11 +27,34 @@ def source_catalog(question: str) -> str:
         if re.search(r'(?<![A-Za-z])'+symbol+r'(?![A-Za-z])',question,re.I):
             base = 'https://www.ishares.com/us/products/' + path
             rows.append(f'{symbol}: holdings CSV {base}/latest-holdings.csv ; product page {base}')
+            if re.search(r'histor|concentration|集中度|历史', question, re.I):
+                from datetime import date
+                from momentum_research_agent.crowding_history import historical_url
+                for value in dict.fromkeys(re.findall(r'\b\d{4}-\d{2}-\d{2}\b', question)):
+                    try:
+                        rows.append(f'{symbol} configured historical route for {value}: {historical_url(symbol, date.fromisoformat(value))}; require exact CSV header date, not guaranteed available.')
+                    except ValueError:
+                        pass
     if not rows:
         return ''
     return ('\n\nConfigured issuer source directory (addresses, not data or verified answers). '
             'For holdings read the CSV directly first. Do not invent product IDs or ajax endpoints. '
             'These configured addresses supersede guessed paths in an assignment.\n' + '\n'.join(rows))
+
+
+def is_holdings_lookup(question: str) -> bool:
+    """Narrow only explicit holdings lookups, leaving analytical requests alone."""
+    from momentum_research_agent.crowding_metrics import PRODUCTS
+
+    # Unknown vocabulary keeps the full profile: mixed requests must not lose tools.
+    words = set(re.findall(r"[a-z]+|[^\x00-\x7f]+", question.lower()))
+    allowed = set("what are the s top holdings holding list show me of for please "
+                  "read source content and include weights weight actual observation "
+                  "date dates as latest current sources links state any missing evidence "
+                  "with their fund portfolio percent percentage ten".split())
+    allowed.update(symbol.lower() for symbol in PRODUCTS)
+    return bool(words & {"holding", "holdings"}) and words <= allowed
+
 
 
 def ground_report(report: ResearchReport, traces: list[ToolTrace]) -> ResearchReport:
@@ -47,6 +70,8 @@ def ground_report(report: ResearchReport, traces: list[ToolTrace]) -> ResearchRe
         if trace.tool == 'read_url':
             urls = {key(trace.arguments.get('url')),key(data.get('url'))} - {''}
             (read if data.get('status') == 'ok' else failed).update(urls)
+        elif trace.tool == 'market_data' and data.get('schema') == 'daily_performance_v1' and data.get('status') == 'ok':
+            read.update(key(s.get('url')) for s in data.get('sources', []) if isinstance(s, dict))
         elif trace.tool == 'web_search' and data.get('evidence_kind') == 'source_discovery':
             leads.update(key(s.get('url')) for s in data.get('sources',[]) if isinstance(s,dict))
     removed = [e for e in report.findings if e.kind == 'retrieval' or

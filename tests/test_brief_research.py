@@ -3,7 +3,7 @@
 import pytest
 
 from proxy_fixtures import provider  # noqa: F401 -- pytest fixture
-from test_short_interest import network  # noqa: F401 -- pytest fixture
+from short_interest_fixtures import network  # noqa: F401 -- pytest fixture
 from momentum_research_agent import brief_research as bridge
 
 

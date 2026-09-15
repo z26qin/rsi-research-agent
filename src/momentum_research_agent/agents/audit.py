@@ -160,7 +160,13 @@ def merge_verification(
         )
     for evidence_id, static_verdict in by_id.items():
         if evidence_id not in seen:
-            merged.append(static_verdict)
+            issue = "No terminal independent verdict was returned for this evidence."
+            merged.append(static_verdict.model_copy(update={
+                "status": more_conservative(static_verdict.status, VerificationStatus.UNCHECKED),
+                "issues": list(dict.fromkeys([*static_verdict.issues, issue])),
+                "notes": f"{static_verdict.notes} {issue}",
+                "rechecked_source": None,
+            }))
 
     missing = list(dict.fromkeys([*static.missing_evidence, *llm.missing_evidence]))
     unsupported = [

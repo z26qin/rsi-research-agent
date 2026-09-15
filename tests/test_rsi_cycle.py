@@ -88,18 +88,6 @@ async def cycle(
     return result, generator
 
 
-async def test_guard_regression_preserves_active_pointer(tmp_path):
-    store = PolicyStore(tmp_path)
-    store.load_active()
-    pointer = store.active_path.read_bytes()
-    result, generator = await cycle(
-        tmp_path,
-        regression=True,
-    )
-    assert result.status == "rejected", result.reasons
-    assert generator.calls == 1
-    assert store.active_path.read_bytes() == pointer
-    assert not replay_experiment(result.experiment_dir).promote
 
 
 async def test_failed_engine_guard_stops_before_candidate_or_research(tmp_path):

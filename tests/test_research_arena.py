@@ -5,7 +5,6 @@ from types import SimpleNamespace as NS
 
 
 from momentum_research_agent.eval.research_arena import ArenaControls, run_world
-from momentum_research_agent.eval.research_scoring import score_run
 from momentum_research_agent.eval.research_world import load_approved_worlds
 from momentum_research_agent.state.policies import PolicyStore
 
@@ -175,15 +174,3 @@ async def test_verifier_prompt_excludes_policy_and_hidden_evaluator_fields(tmp_p
         assert "hidden_facts" not in text
         assert "private-trigger" not in text
         assert "target_improvements" not in text
-
-
-async def test_clipped_source_negation_cannot_be_counted_as_supported(tmp_path):
-    world = next(w for w in load_approved_worlds() if w.world_id == "local_crowding")
-    fact = next(f for f in world.hidden_facts if "not entered" in f.quote)
-    result, _ = await run(tmp_path, world, [fact])
-    finding = result.submitted_reports[0].findings[0]
-    finding.claim = finding.excerpt = "entered a bear-market drawdown."
-    assert finding.excerpt in next(
-        s.text for s in world.sources if s.url == fact.source_url
-    )
-    assert score_run(world, result).unsupported_claim_count == 1

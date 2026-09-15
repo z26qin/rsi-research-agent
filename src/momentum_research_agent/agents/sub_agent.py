@@ -19,6 +19,8 @@ from momentum_research_agent.research_contract import source_catalog, ground_rep
 from momentum_research_agent.models.schemas import (
     AgentRunResult,
     ResearchReport,
+    NumericMetric,
+    extract_json_text,
     Task,
     ToolTrace,
     UsageSummary,
@@ -129,6 +131,31 @@ def _bind_report(task: Task, report: ResearchReport) -> ResearchReport:
     )
 
 
+def _recover_metric_links(text: str) -> ResearchReport:
+    """Withhold broken metric references; never invent or repair their provenance."""
+    payload = json.loads(extract_json_text(text))
+    raw_metrics = payload.get('metrics')
+    if not isinstance(raw_metrics, list):
+        raise ValueError('No metric list to recover')
+    report = ResearchReport.model_validate({**payload, 'metrics': []})
+    evidence = {e.id: e.source_url for e in report.findings}
+    kept, gaps = [], []
+    for raw in raw_metrics:
+        metric = NumericMetric.model_validate(raw)
+        if metric.value is not None and evidence.get(metric.evidence_id) != metric.source_url:
+            gaps.append(f'Numeric observation withheld: {metric.name}; no matching Evidence ID/source URL.')
+        else:
+            kept.append(metric)
+    if not gaps:
+        raise ValueError('Not a metric-link failure')
+    # Summary may mix supported and removed numbers; retain the raw draft only in diagnostics.
+    report.summary = 'Partial report: see retained findings and metrics; invalid numeric references were withheld.'
+    report.status = 'partial'
+    report.unanswered_questions.extend(gaps)
+    report.metrics = kept
+    return ResearchReport.model_validate(report.model_dump())
+
+
 def _fallback_report(task: Task, text: str, error: str | None = None) -> ResearchReport:
     summary = text.strip() if text.strip() else (error or "Sub-agent produced no report.")
     unanswered = ["Final model output did not match ResearchReport JSON."]
@@ -228,16 +255,30 @@ class SubAgent:
                 budget=self.budget,
                 finalize_research=True,
             )
+            final_dir = session_dir / 'finalizations'
+            final_dir.mkdir(parents=True, exist_ok=True)
+            final_path = final_dir / f'{task.id}.json'
+            final_record = {'completed': outcome.completed, 'stop_reason': outcome.stop_reason,
+                            'text': outcome.text}
+            final_path.write_text(json.dumps(final_record, ensure_ascii=False), encoding='utf-8')
             if not outcome.completed:
-                report = _budget_report(task, traces, outcome.stop_reason)
+                report = _budget_report(task, traces, outcome.stop_reason, session_dir)
             else:
                 try:
                     report = _bind_report(task, parse_model_json(ResearchReport, outcome.text))
                     if outcome.stop_reason == 'budget_finalized':
                         report.status = 'partial'
                         report.unanswered_questions.append('Research budget reached; remaining claims need further evidence.')
-                except ValidationError:
-                    report = _budget_report(task, traces, 'invalid_report_json')
+                except ValidationError as exc:
+                    final_record['validation_errors'] = [
+                        {'loc': list(e['loc']), 'type': e['type'], 'msg': e['msg']}
+                        for e in exc.errors(include_input=False, include_url=False)
+                    ]
+                    final_path.write_text(json.dumps(final_record, ensure_ascii=False), encoding='utf-8')
+                    try:
+                        report = _bind_report(task, _recover_metric_links(outcome.text))
+                    except (ValidationError, ValueError, TypeError, AttributeError):
+                        report = _budget_report(task, traces, 'invalid_report_json', session_dir)
         except asyncio.CancelledError:
             if traces:
                 append_traces(session_dir, traces)
@@ -245,7 +286,7 @@ class SubAgent:
         except AgentDeadlineExceeded as exc:
             if not traces:
                 raise
-            report = _budget_report(task, traces, str(exc))
+            report = _budget_report(task, traces, str(exc), session_dir)
         except AgentRuntimeError:
             if traces:
                 append_traces(session_dir, traces)
@@ -261,7 +302,16 @@ class SubAgent:
         return AgentRunResult(report=report, usage=local_usage, tool_calls=tool_calls, traces=traces)
 
 
-def _budget_report(task: Task, traces: list[ToolTrace], reason: str) -> ResearchReport:
+def _budget_report(task: Task, traces: list[ToolTrace], reason: str, session_dir: Path | None = None) -> ResearchReport:
+    if session_dir is not None:
+        from momentum_research_agent.tools.performance import retained_report
+        retained = retained_report(task, traces, session_dir, reason)
+        if retained is not None:
+            return retained
+        from momentum_research_agent.tools.holdings import retained_report as retained_holdings
+        retained = retained_holdings(task, traces, session_dir, reason)
+        if retained is not None:
+            return retained
     sources: list[str] = []
     for trace in traces:
         try:

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+
+from momentum_research_agent.tools.registry import get_tool_context
+from momentum_research_agent.tools.performance import calculate, archive
 
 from momentum_research_agent.tools.registry import register_tool
 
@@ -51,13 +56,19 @@ def _to_markdown(frame) -> str:
 @register_tool(
     name="market_data",
     description=(
-        "Fetch OHLCV history for a US ticker via yfinance and return a markdown "
-        "table of recent close, return, and volume."
+        "Fetch adjusted prices. For daily data, returns archived deterministic return, "
+        "annualized sample volatility and maximum drawdown over 20 common prices. "
+        "Use benchmark to compare two tickers in ONE call (e.g. ticker MTUM, benchmark SPY). "
+        "Other intervals return the legacy recent-price table."
     ),
     parameters={
         "type": "object",
         "properties": {
             "ticker": {"type": "string", "description": "Ticker symbol, e.g. NVDA."},
+            "benchmark": {
+                "type": "string",
+                "description": "Optional comparison ticker; daily interval only.",
+            },
             "period": {
                 "type": "string",
                 "description": "yfinance period string. Default: 3mo.",
@@ -70,10 +81,44 @@ def _to_markdown(frame) -> str:
         "required": ["ticker"],
     },
 )
-async def market_data(ticker: str, period: str = "3mo", interval: str = "1d") -> str:
+async def market_data(
+    ticker: str, period: str = "3mo", interval: str = "1d", benchmark: str | None = None
+) -> str:
+    symbols = list(dict.fromkeys(s.upper() for s in (ticker, benchmark) if s))
+    if not symbols or any(
+        not re.fullmatch(r"[A-Z^][A-Z0-9.^-]{0,14}", s) for s in symbols
+    ):
+        return json.dumps({"status": "unavailable", "reason": "Invalid ticker"})
+    if benchmark and interval != "1d":
+        return json.dumps(
+            {"status": "unavailable", "reason": "Comparison requires daily interval"}
+        )
     try:
-        frame = await asyncio.to_thread(_download, ticker, period, interval)
+        frames = {}
+        for symbol in symbols:
+            frames[symbol] = await asyncio.to_thread(
+                _download, symbol, period, interval
+            )
+        if interval != "1d":
+            return (
+                f"# {ticker.upper()} period={period} interval={interval}\n\n"
+                + _to_markdown(frames[symbols[0]])
+            )
+        ctx = get_tool_context()
+        if not ctx.session_dir:
+            return json.dumps(
+                {
+                    "status": "unavailable",
+                    "reason": "Session required for evidence retention",
+                }
+            )
+        return json.dumps(archive(calculate(frames), ctx.session_dir), allow_nan=False)
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
-        return f"market_data failed for {ticker}: {exc}"
-    header = f"# {ticker.upper()}  period={period} interval={interval}\n\n"
-    return header + _to_markdown(frame)
+        return json.dumps(
+            {
+                "status": "unavailable",
+                "reason": f"Price calculation unavailable ({type(exc).__name__}); missing or invalid data are not zero.",
+            }
+        )

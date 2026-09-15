@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 
 from momentum_research_agent.models.schemas import (
     Evidence,
@@ -11,6 +12,7 @@ from momentum_research_agent.models.schemas import (
     ResearchReport,
     Task,
     VerificationReport,
+    VerificationStatus,
     utcnow,
 )
 from momentum_research_agent.state.persistence import load_json, save_json, save_text
@@ -65,6 +67,85 @@ def persist_research_report(session_dir: Path, task: Task, report: ResearchRepor
     save_json(payload_path, report.model_dump(mode="json"))
     save_text(markdown_path(session_dir, task), render_research_report_markdown(report))
     return payload_path
+
+
+def render_answer_markdown(report: ResearchReport, verification: VerificationReport) -> str:
+    """Present canonical observations with verdicts, without rewriting research.
+
+    Free-form analyst summaries can mix correct rows with rejected arithmetic.
+    Numeric answers therefore lead with the existing metrics rather than that draft.
+    Evidence verdicts are not an independent recalculation of every metric.
+    """
+    verdicts = {item.evidence_id: item for item in verification.verdicts}
+    sources: dict[str, int] = {}
+
+    def check_label(verdict) -> str:
+        if verdict is None:
+            return VerificationStatus.UNCHECKED.value
+        if verdict.status is VerificationStatus.VERIFIED and not verdict.rechecked_source:
+            return 'unconfirmed (saved status: verified)'
+        return verdict.status.value
+
+    def cell(value: object) -> str:
+        return str(value).replace('|', '\\|').replace('\n', ' ')
+
+    def source_ref(url: str | None) -> str:
+        if not url:
+            return 'unavailable'
+        sources.setdefault(url, len(sources) + 1)
+        return f'[{sources[url]}]'
+
+    lines = [f'# {report.title}', '', f'Data as-of: {report.as_of or "unknown"}', '',
+             f'Research coverage: **{report.status}**; verification: **{verification.overall_status}**.', '']
+    if report.metrics:
+        lines += ['| Observation | Value | Unit | Data date | Evidence check | Source |',
+                  '| --- | ---: | --- | --- | --- | --- |']
+        for metric in report.metrics:
+            verdict = verdicts.get(metric.evidence_id)
+            status = verdict.status if verdict else VerificationStatus.UNCHECKED
+            value = ('withheld' if status is VerificationStatus.REJECTED else
+                     metric.value if metric.value is not None else 'unavailable')
+            lines.append('| ' + ' | '.join(cell(v) for v in (
+                metric.name, value, metric.unit, metric.as_of or 'unknown',
+                check_label(verdict), source_ref(metric.source_url),
+            )) + ' |')
+        lines += ['', 'Values are reported observations. Evidence checks apply to the linked '
+                  'claims; they do not independently recalculate every number. '
+                  'Weak or unchecked observations need further review; rejected values are withheld.', '']
+
+    lines += ['## Evidence', '']
+    for item in report.findings:
+        verdict = verdicts.get(item.id)
+        status = verdict.status if verdict else VerificationStatus.UNCHECKED
+        claim = 'Claim withheld' if status is VerificationStatus.REJECTED else item.claim
+        lines.append(f'- **{check_label(verdict)}**: {claim} {source_ref(item.source_url)}')
+    if not report.findings:
+        lines.append('No source-backed answer is available from this run.')
+    lines.append('')
+
+    notes = list(report.limitations) + list(report.unanswered_questions)
+    if any(v.status is VerificationStatus.VERIFIED and not v.rechecked_source
+           for v in verification.verdicts):
+        notes.insert(0, 'Independent verification is unconfirmed where a saved verified '
+                     'verdict has no rechecked source. Static audit fallback can retain '
+                     'that status; this answer does not treat it as independent confirmation.')
+    notes.extend(f"Research contradiction (not separately verified): {item}" for item in report.contradictions)
+    notes.extend(m.missing_reason for m in report.metrics if m.missing_reason)
+    for verdict in verification.verdicts:
+        if verdict.status is not VerificationStatus.VERIFIED:
+            notes.extend(verdict.issues)
+            if verdict.notes:
+                notes.append(verdict.notes)
+    notes.extend(verification.missing_evidence)
+    if notes:
+        lines += ['## Gaps and caveats', '', *[f'- {note}' for note in dict.fromkeys(notes)], '']
+    if sources:
+        lines += ['## Sources', '']
+        for url, index in sources.items():
+            href = quote(url, safe=':/?&=%#@+~.-_')
+            lines.append(f'{index}. [Source {index}]({href})')
+    lines += ['', 'Original research and independent verification are retained in the session artifacts.', '']
+    return '\n'.join(lines)
 
 
 def research_report_from_legacy_markdown(task: Task, text: str) -> ResearchReport:

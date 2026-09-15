@@ -1,17 +1,9 @@
 """Publication cutoff, complete-basket coverage, and offline evidence integrity."""
 
-from datetime import date
-
 import pytest
 
 from momentum_research_agent import short_interest as si
 
-TARGET = date(2026, 9, 4)
-REFERENCE = date(2026, 5, 29)
-HOLDINGS = [
-    dict(ticker="AMD", weight=0.3, exchange="NASDAQ", currency="USD", name="AMD"),
-    dict(ticker="MU", weight=0.2, exchange="NASDAQ", currency="USD", name="Micron"),
-]
 HEADER = "accountingYearMonthNumber|symbolCode|issueName|issuerServicesGroupExchangeCode|marketClassCode|currentShortPositionQuantity|previousShortPositionQuantity|stockSplitFlag|averageDailyVolumeQuantity|daysToCoverQuantity|revisionFlag|changePercent|changePreviousNumber|settlementDate\n"
 
 
@@ -79,21 +71,3 @@ def network(monkeypatch):
 
     monkeypatch.setattr(si, "_attempt", fetch)
     return calls
-
-
-def test_published_periods_and_preserved_dtc_replay(tmp_path, network):
-    root = tmp_path / "evidence"
-    result = si.build(root, TARGET, REFERENCE, HOLDINGS)
-    assert result["status"] == "complete"
-    assert result["latest_settlement"] == "2026-08-14"
-    assert result["latest_publication"] == "2026-08-25"
-    assert result["periods"]["previous"]["settlement_date"] == "2026-07-31"
-    assert result["periods"]["reference"]["publication_date"] == "2026-06-09"
-    assert result["periods"]["latest"]["records"]["MTUM"]["days_to_cover"] == 1
-    assert result["basket"]["weighted_days_to_cover"]["latest"] == pytest.approx(1.294)
-    assert result["basket"]["covered_count"] == 2
-    assert result["basket"]["total_weight"] == 0.5
-    assert len(network) == 4
-    assert si.replay(root) == result
-    with pytest.raises(FileExistsError):
-        si.build(root, TARGET, REFERENCE, HOLDINGS)
